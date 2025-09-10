@@ -36,7 +36,9 @@ from neurons.base_node import CPU_COUNT
 from tplr import model_factory
 from tplr.distributed import dist_helper
 from tplr.muon import Muon, SingleDeviceMuonWithAuxAdam
-
+from datetime import datetime, timedelta, timezone
+import time
+import json
 
 class Trainer:
     """This will be an ongoing project to separate
@@ -392,11 +394,24 @@ class Trainer:
 
         return total_loss, n_batches
 
+    def load_config_from_file(self, file_path: str) -> dict:
+        try:
+            with open(file_path, "r") as f:
+                config_data = json.load(f)
+            return config_data
+        except FileNotFoundError:
+            tplr.logger.error(f"CRITICAL: Config file not found at {file_path}")
+            raise
+        except Exception as e:
+            tplr.logger.error(f"Error loading {file_path}: {e}")
+            raise
+
     async def inner_steps(
         self,
         loader: DataLoader,
         step_window: int,
         null_round: bool = False,
+        last_time: datetime | float | None = None,
     ) -> dict:
         """
         One inner-loop optimisation pass that is gradient-accumulation aware and
@@ -532,7 +547,25 @@ class Trainer:
                 local_loss_sum += loss_item  # defer collective
 
                 batch_count += 1
-                window_changed = self.current_window != step_window
+                if last_time is None:
+                    window_changed = self.current_window != step_window
+                else:
+                    # Check if last_time is already a datetime object
+                    if isinstance(last_time, datetime):
+                        pass
+                    else:
+                        # last_time is a timestamp, convert it to datetime
+                        last_time = datetime.fromtimestamp(last_time, tz=timezone.utc)
+                    now_time = time.time()
+                    now_time = datetime.fromtimestamp(now_time, tz=timezone.utc)
+                    config_data = self.load_config_from_file(f"myconfig.json")
+
+                    blocks_per_window = self.hparams.blocks_per_window - config_data["early_stop_blocks"]
+                    window_changed = now_time > last_time + timedelta(seconds=blocks_per_window*12)
+
+                    if window_changed:
+                        tplr.logger.info(f"now_time: {now_time}, last_time: {last_time}, window_changed: {window_changed}")
+
 
                 # ------------------------------------------------------------------ #
                 # 4. Decide *together* whether to take an optimiser step

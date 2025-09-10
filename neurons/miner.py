@@ -502,23 +502,20 @@ class Miner(BaseNode, Trainer):
                 )
             else:
                 tplr.logger.info("Start accumulating...")
+            if self.last_time is not None:
+                time_passed = time.time() - self.last_time
+                tplr.logger.info(f"Time passed since last_time: {time_passed:.2f}")
+
             res = await self.inner_steps(
-                loader=self.loader, step_window=step_window, null_round=null_round
+                loader=self.loader,
+                step_window=step_window,
+                last_time=self.last_time,
+                null_round=null_round,
             )
             training_time = tplr.T() - train_start
             window_entry_loss = res["window_entry_loss"]
             n_batches = res["batch_count"]
             window_tokens = res["batch_tokens"]
-
-            # If training finishes early, wait until the *next* chain-window starts.
-            if self.current_window == step_window:
-                tplr.logger.info(
-                    "Training complete; waiting for window to be exhausted..."
-                )
-                await self.wait_until_window(step_window + 1)
-            tplr.logger.info(
-                f"{tplr.P(step_window, tplr.T() - train_start)} Completed training"
-            )
 
             # Synchronise all ranks
             dist_helper.safe_barrier("pre_gather", self.local_rank)
@@ -582,6 +579,18 @@ class Miner(BaseNode, Trainer):
                     for k, v in gradient.items()
                 }
 
+
+            # If training finishes early, wait until the *next* chain-window starts.
+            if self.current_window == step_window:
+                tplr.logger.info(
+                    "Training complete; waiting for window to be exhausted..."
+                )
+                await self.wait_until_window(step_window + 1)
+            tplr.logger.info(
+                f"{tplr.P(step_window, tplr.T() - train_start)} Completed training"
+            )
+
+            if self.is_master:
                 put_start = tplr.T()
                 await self.comms.put(
                     state_dict=processed_state_dict,

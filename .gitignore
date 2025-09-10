@@ -1,6 +1,8 @@
 .env.yaml
 .env
 *.pth
+remote/
+checkpoints/
 
 # Python
 __pycache__/

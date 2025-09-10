@@ -43,6 +43,7 @@ class BaseNode(abc.ABC):
         self.stop_event = asyncio.Event()
         self._bg_tasks: set[asyncio.Task] = set()
         self._threads: list[threading.Thread] = []
+        self.last_time = None
 
         # window signalling (initialised in main)
         self.window_changed = None
@@ -262,6 +263,7 @@ class BaseNode(abc.ABC):
                     if hasattr(self, "comms"):
                         self.comms.current_window = self.current_window
                     tplr.logger.info(f"▶ window → {self.current_window}")
+                    self.last_time = time.time()
 
                     # notify any awaiters
                     if self.window_changed and self._notify_loop:
