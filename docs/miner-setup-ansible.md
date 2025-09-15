@@ -1,307 +1,360 @@
-# Miner Setup with Ansible
+# Miner Setup
 
-This guide provides an alternative method for setting up Templar miners using Ansible automation. The Ansible playbook automates the deployment process, making it easier to provision miners across multiple hosts or manage multi-GPU configurations.
+This document provides a comprehensive guide on how to set up and run a miner using `miner.py`. Miners are crucial components of **τemplar**, responsible for training the model on assigned data subsets and sharing their gradients with peers.
 
-## Overview
+## Table of Contents
 
-The Ansible playbook (`scripts/miner-setup-ansible/playbook.yml`) automates the following tasks:
-- Clones the Templar repository
-- Sets up the required Python virtual environment with CUDA support
-- Installs necessary system and Python packages
-- Configures environment variables and credentials
-- Deploys miners as managed services (systemd or nohup)
-- Supports multi-GPU configurations with separate instances per GPU
+- [Miner Setup](#miner-setup)
+  - [Introduction](#introduction)
+  - [Prerequisites](#prerequisites)
+  - [Running the Miner](#running-the-miner)
+  - [Configuration](#configuration)
+    - [Environment Variables](#environment-variables)
+    - [Hardware Requirements](#hardware-requirements)
+    - [Network Options](#network-options)
+    - [InfluxDB Configuration](#influxdb-configuration)
+  - [Monitoring](#monitoring)
+    - [Logs](#logs)
+    - [Performance](#performance)
+  - [Troubleshooting](#troubleshooting)
+  - [Miner Operations](#miner-operations)
+    - [Model Synchronization](#model-synchronization)
+    - [Training Process](#training-process)
+    - [Gradient Sharing](#gradient-sharing)
+
+---
+
+## Introduction
+
+This guide will help you set up and run a miner for **τemplar**. We'll cover both the recommended Docker Compose method and manual installation for environments where Docker is not preferred.
+
+---
 
 ## Prerequisites
 
-Before using the Ansible playbook, ensure you have:
+- **NVIDIA GPU** with CUDA support
+  - **Minimum H200 required** (141GB VRAM)
+  - Recommended: 8x H200 GPUs for optimal performance
+- **Ubuntu** (or Ubuntu-based Linux distribution)
+- **Git**
+- **Hugging Face Authentication**:
+  - Create a Hugging Face account and generate a token at https://huggingface.co/settings/tokens
+  - Accept the Gemma model terms at https://huggingface.co/google/gemma-3-270m (required for tokenizer access)
+  - Set `HF_TOKEN` environment variable with your token
+- **Cloudflare R2 Bucket Configuration**:
+  - **Dataset Setup**: Please refer to [Shared Sharded Dataset Documentation](./shared_sharded_dataset.md) for complete dataset setup instructions, including:
+    - R2 bucket settings
+    - Dataset download process
+    - No pre-download is required, but bucket syncing is optional and recommended
+  - **Gradient Bucket Setup**:
+    1. **Create a Bucket**: Name it the same as your **account ID** and set the **region** to **ENAM**.
+    2. **Generate Tokens**:
+       - **Read Token**: Admin Read permissions.
+       - **Write Token**: Admin Read & Write permissions.
+    3. **Store Credentials**: You'll need these for the `.env` file.
 
-- **Control Machine Requirements**:
-  - [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html) installed
-  - SSH access configured to your target hosts
-  - Python 3 and pip
-  - Unix-like environment (Linux/macOS)
+---
 
-- **Target Host Requirements**:
-  - Ubuntu (22.04 recommended)
-  - NVIDIA GPU with CUDA support already installed
-  - SSH access enabled
-  - Python installed (the playbook will install if missing)
+## Running the Miner
 
-- **Templar Requirements**:
-  - Wallet credentials (coldkey and hotkey)
-  - Cloudflare R2 bucket configuration
-  - Weights & Biases API key
-  - Dataset setup following the [R2 Dataset Guide](./r2_dataset.md)
+> Note: Using Ansible (Automated Setup)
+>
+> For automated deployment across multiple hosts or multi-GPU configurations, you can use our Ansible playbook. This method is particularly useful for:
+>
+> - Deploying to multiple servers
+> - Managing multi-GPU setups
+> - Automating the entire setup process
+>
+> See the [Ansible Setup Guide](./miner-setup-ansible.md) for detailed instructions.
 
-## Directory Structure
+### Instructions
 
-The Ansible setup is located in `scripts/miner-setup-ansible/`:
+1. **Install System Dependencies**:
 
-```
-scripts/miner-setup-ansible/
-├── README.md
-├── playbook.yml
-├── inventory.example
-├── group_vars/
-│   └── all/
-│       └── vault.yml.example
-└── roles/
-    └── templar/
-        ├── defaults/
-        │   └── main.yml
-        ├── tasks/
-        │   └── main.yml
-        └── templates/
-            ├── miner.service.j2
-            └── run.sh.j2
-```
+   ```bash
+   # Add Python 3.11 repository
+   sudo add-apt-repository ppa:deadsnakes/ppa
+   sudo apt-get update
+
+   # Install required packages
+   sudo apt-get install python3.11 python3.11-venv git
+   ```
+
+  *PM2 Support Installation
+
+  ```bash
+   # Install required packages
+   apt update && apt upgrade -y && apt-get install -y nano git python3-pip jq npm && npm install pm2 -g && pm2 update
+   ```
+
+2. **Install NVIDIA CUDA Drivers**:
+
+   Install the appropriate NVIDIA CUDA drivers for your GPU.
+
+3. **Clone the Repository**:
+
+   ```bash
+   git clone https://github.com/tplr-ai/templar.git
+   cd templar
+   ```
+
+4. **Set Up Python Environment**:
+
+   ```bash
+   # Create virtual environment
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+
+   # Upgrade pip
+   pip install --upgrade pip
+
+   # Install PyTorch with CUDA support
+   pip install torch --index-url https://download.pytorch.org/whl/cu118
+
+
+   # Install uv tool (if needed)
+   pip install uv
+   ```
+
+  *PM2 Support Installation
+
+  ```bash
+   # Install uv and configure venv
+   pip install uv && uv python install 3.11 && uv python pin 3.11 && uv venv .venv
+   source .venv/bin/activate
+
+   # Install PyTorch with CUDA support
+   uv pip install torch --index-url https://download.pytorch.org/whl/cu118\
+
+   # uv sync to install required packages
+   uv sync --extra all
+   ```
+
+5. **Create and Register Wallets**:
+
+   ```bash
+   # Create coldkey
+   btcli wallet new_coldkey --wallet.name default --n-words 12
+
+   # Create and register hotkey
+   btcli wallet new_hotkey --wallet.name default --wallet.hotkey miner --n-words 12
+   btcli subnet register --wallet.name default --wallet.hotkey miner --netuid <netuid> --subtensor.network <network>
+   ```
+
+6. **Log into Weights & Biases (WandB)**:
+
+   ```bash
+   wandb login your_wandb_api_key
+   ```
+
+7. **Set Environment Variables**:
+
+   Export necessary environment variables or create a `.env` file in the project root.
+
+   ```bash
+   export HF_TOKEN=your_huggingface_token  # Required for tokenizer access
+   export WANDB_API_KEY=your_wandb_api_key
+   export INFLUXDB_TOKEN=your_influxdb_token
+   export NODE_TYPE=your_node_type
+   export WALLET_NAME=your_wallet_name
+   export WALLET_HOTKEY=your_wallet_hotkey
+   # GPU is automatically assigned by Docker (GPUs 0,1,2 for miner)
+   export NETWORK=your_network
+   export NETUID=your_netuid
+   export DEBUG=your_debug_setting
+   
+   # Gradients R2 credentials
+   export R2_GRADIENTS_ACCOUNT_ID=your_r2_account_id
+   export R2_GRADIENTS_BUCKET_NAME=your_r2_bucket_name
+   export R2_GRADIENTS_READ_ACCESS_KEY_ID=your_r2_read_access_key_id 
+   export R2_GRADIENTS_READ_SECRET_ACCESS_KEY=your_r2_read_secret_access_key
+   export R2_GRADIENTS_WRITE_ACCESS_KEY_ID=your_r2_write_access_key_id
+   export R2_GRADIENTS_WRITE_SECRET_ACCESS_KEY=your_r2_write_secret_access_key
+
+   # Dataset R2 credentials - You may set up your own Shared Sharded Dataset, but must at minimum set these keys
+   # See docs/shared_sharded_dataset.md for instructions
+   export R2_DATASET_ACCOUNT_ID="8af7f92a8a0661cf7f1ac0420c932980"
+   export R2_DATASET_BUCKET_NAME="gemma-migration"
+   export R2_DATASET_READ_ACCESS_KEY_ID="a733fac6c32a549e0d48f9f7cf67d758"
+   export R2_DATASET_READ_SECRET_ACCESS_KEY="f50cab456587f015ad21c48c3e23c7ff0e6f1ad5a22c814c3a50d1a4b7c76bb9"
+   export DATASET_BINS_PATH="tokenized/"
+
+
+   # Aggregator R2 credentials
+   export R2_AGGREGATOR_ACCOUNT_ID="8af7f92a8a0661cf7f1ac0420c932980"
+   export R2_AGGREGATOR_BUCKET_NAME="aggregator"
+   export R2_AGGREGATOR_READ_ACCESS_KEY_ID="bb4b9f02a64dacead181786b8f353b67"
+   export R2_AGGREGATOR_READ_SECRET_ACCESS_KEY="f50761d0fbb0773c55f61debdf87439735c32c096fe4b1ab6aa6bfb7f52aa30b"
+   
+   export GITHUB_USER=your_github_username
+   ```
+
+8. **Run the Miner**:
+
+   ```bash
+   python neurons/miner.py \
+     --actual_batch_size 6 \
+     --wallet.name default \
+     --wallet.hotkey miner \
+     --device cuda \
+     --use_wandb \
+     --netuid <netuid> \
+     --subtensor.network <network> \
+     --sync_state
+   ```
+
+  *PM2 Support Installation
+
+  ```bash
+   pm2 start neurons/miner.py --interpreter python3 --name sn3miner -- \
+   --actual_batch_size 6 \
+   --wallet.name default \
+   --wallet.hotkey miner \
+   --device cuda \
+   --subtensor.network <network> \
+   --sync_state \
+   --netuid <netuid> 
+  ```
+
+---
 
 ## Configuration
 
-### 1. Create Inventory File
+### Environment Variables
 
-Create an inventory file defining your target hosts and their GPU configurations:
+When using Docker Compose, set the following variables in the `docker/.env` file:
+
+```dotenv:docker/.env
+# Required: Hugging Face token for tokenizer access
+HF_TOKEN=your_huggingface_token
+
+# Add your Weights & Biases API key
+WANDB_API_KEY=your_wandb_api_key
+INFLUXDB_TOKEN=your_influxdb_token
+
+# Cloudflare R2 Credentials
+R2_ACCOUNT_ID=your_r2_account_id
+
+R2_READ_ACCESS_KEY_ID=your_r2_read_access_key_id
+R2_READ_SECRET_ACCESS_KEY=your_r2_read_secret_access_key
+
+R2_WRITE_ACCESS_KEY_ID=your_r2_write_access_key_id
+R2_WRITE_SECRET_ACCESS_KEY=your_r2_write_secret_access_key
+
+# Wallet Configuration
+WALLET_NAME=default
+WALLET_HOTKEY=your_miner_hotkey_name
+
+# Network Configuration
+NETWORK=finney
+NETUID=3
+
+# GPU Configuration (automatically handled by Docker)
+# Miner service uses GPUs 0, 1, and 2 from the host
+
+# Additional Settings
+DEBUG=false
+```
+
+**Note**: The R2 permissions remain unchanged from previous configurations.
+
+### Hardware Requirements
+
+- **GPU Requirements**:
+  - **Minimum: NVIDIA H200 with 141GB VRAM** (as defined in min_compute.yml)
+  - Recommended: 8x H200 GPUs for miners
+  - **Minimum CPU**: 32 cores, 3.5 GHz
+  - **Minimum RAM**: 800 GB
+  - **Minimum Network**: 1024 Mbps download/upload bandwidth
+- **Storage**: 500GB+ recommended for model and data
+- **Network**: Stable internet connection with good bandwidth
+
+### Network Options
+
+- **Mainnet (Finney)**:
+  - Network: `finney`
+  - Netuid: `3`
+- **Testnet**:
+  - Network: `test`
+  - Netuid: `223`
+- **Local**:
+  - Network: `local`
+  - Netuid: `1`
+
+### InfluxDB Configuration
+
+Optional InfluxDB configuration variables include:
+
+- `INFLUXDB_TOKEN`: Authentication token
+- `INFLUXDB_HOST`: Custom host address
+- `INFLUXDB_PORT`: Connection port (default 8086)
+- `INFLUXDB_DATABASE`: Database name
+- `INFLUXDB_ORG`: Organization identifier
+
+Example configuration:
 
 ```bash
-cd scripts/miner-setup-ansible
-cp inventory.example inventory
+INFLUXDB_HOST=custom-influxdb-host.example.com
+INFLUXDB_PORT=8086
+INFLUXDB_DATABASE=custom-database
+INFLUXDB_ORG=custom-org
+INFLUXDB_TOKEN=your-influxdb-token
 ```
 
-Edit the `inventory` file:
+These settings are optional and will fall back to default values if not provided.
 
-```ini
-[bittensor_subnet]
-# Single GPU host example
-192.168.1.100 ansible_user=ubuntu ansible_port=22 wallet_hotkeys='["miner"]' cuda_devices='["cuda"]'
+---
 
-# Multi-GPU host example
-192.168.1.101 ansible_user=ubuntu ansible_port=22 wallet_hotkeys='["miner_1", "miner_2"]' cuda_devices='["cuda:0", "cuda:1"]'
-```
+## Monitoring
 
-**Important**: The `wallet_hotkeys` and `cuda_devices` arrays must have matching lengths.
+### Logs
 
-### 2. Configure Secrets with Ansible Vault
+- **Docker Logs**:
 
-Create an encrypted vault file for sensitive credentials:
+  ```bash
+  docker logs -f templar-miner-${WALLET_HOTKEY}
+  ```
 
-```bash
-# Create the directory if it doesn't exist
-mkdir -p group_vars/all/
+- **Weights & Biases**:
 
-# Copy the example file
-cp group_vars/all/vault.yml.example group_vars/all/vault.yml
+  - Ensure `--use_wandb` is enabled
+  - Monitor training metrics and performance on your WandB dashboard
 
-# Encrypt the vault file
-ansible-vault encrypt group_vars/all/vault.yml
-```
+### Performance
 
-Edit the vault file with your credentials:
+Keep an eye on:
 
-```bash
-ansible-vault edit group_vars/all/vault.yml
-```
+- GPU utilization
+- Memory usage
+- Network bandwidth
+- Training progress
+- Rewards and weights
 
-Configure the following variables:
-
-```yaml
-env_vars:
-  WANDB_API_KEY: "your_wandb_api_key"
-  INFLUXDB_TOKEN: "your_influxdb_token"  # Optional
-  
-  # Dataset R2 credentials - Set up your own dataset
-  # See: docs/r2_dataset.md for instructions
-  R2_DATASET_ACCOUNT_ID: "your_dataset_account_id"
-  R2_DATASET_BUCKET_NAME: "your_dataset_bucket_name"
-  R2_DATASET_READ_ACCESS_KEY_ID: "your_dataset_read_access_key_id"
-  R2_DATASET_READ_SECRET_ACCESS_KEY: "your_dataset_read_secret_access_key"
-  
-  # Gradient bucket credentials
-  R2_GRADIENTS_ACCOUNT_ID: "your_gradients_account_id"
-  R2_GRADIENTS_BUCKET_NAME: "your_gradients_bucket_name"
-  R2_GRADIENTS_READ_ACCESS_KEY_ID: "your_gradients_read_access_key_id"
-  R2_GRADIENTS_READ_SECRET_ACCESS_KEY: "your_gradients_read_secret_access_key"
-  R2_GRADIENTS_WRITE_ACCESS_KEY_ID: "your_gradients_write_access_key_id"
-  R2_GRADIENTS_WRITE_SECRET_ACCESS_KEY: "your_gradients_write_secret_access_key"
-  
-  # The aggregator credentials use the provided values
-  R2_AGGREGATOR_ACCOUNT_ID: "8af7f92a8a0661cf7f1ac0420c932980"
-  R2_AGGREGATOR_BUCKET_NAME: "aggregator"
-  R2_AGGREGATOR_READ_ACCESS_KEY_ID: "bb4b9f02a64dacead181786b8f353b67"
-  R2_AGGREGATOR_READ_SECRET_ACCESS_KEY: "f50761d0fbb0773c55f61debdf87439735c32c096fe4b1ab6aa6bfb7f52aa30b"
-  
-  WALLET_NAME: "default"
-  NETWORK: "finney"
-  NETUID: "3"
-  GITHUB_USER: "your_github_username"
-
-# Miner parameters
-actual_batch_size: 5
-netuid: "3"
-subtensor_network: "finney"
-wallet_name: "default"
-
-# GPU configuration (defaults, can be overridden in inventory)
-cuda_devices: ["cuda:0"]
-wallet_hotkeys: ["miner_0"]
-```
-
-### 3. Configure the Playbook
-
-The default configuration can be found in `roles/templar/defaults/main.yml`. You can override these values in your vault file or pass them as extra variables when running the playbook.
-
-Key configuration options:
-- `use_systemd`: Whether to use systemd services (default: false)
-- `actual_batch_size`: Batch size for training (default: 5)
-- System packages to install (customizable via `additional_apt_packages`)
-- Python packages to install (customizable via `additional_pip_packages`)
-
-## Running the Playbook
-
-### Basic Usage
-
-From the `scripts/miner-setup-ansible/` directory:
-
-```bash
-ansible-playbook -i inventory playbook.yml --ask-vault-pass
-```
-
-This will:
-1. Prompt for your vault password
-2. Connect to the hosts defined in your inventory
-3. Execute the provisioning tasks
-
-### Advanced Usage
-
-#### Override Variables
-
-You can override default variables via command line:
-
-```bash
-ansible-playbook -i inventory playbook.yml \
-  -e "actual_batch_size=6 wallet_name=my_wallet" \
-  --ask-vault-pass
-```
-
-#### Enable Systemd Services
-
-To use systemd instead of nohup for process management:
-
-```bash
-ansible-playbook -i inventory playbook.yml \
-  -e "use_systemd=true" \
-  --ask-vault-pass
-```
-
-#### Verbose Output
-
-For debugging, use the `-vvv` flag:
-
-```bash
-ansible-playbook -i inventory playbook.yml --ask-vault-pass -vvv
-```
-
-## Multi-GPU Support
-
-The playbook supports running multiple miner instances on hosts with multiple GPUs:
-
-1. **Configure in Inventory**:
-   ```ini
-   multi_gpu_host cuda_devices='["cuda:0", "cuda:1", "cuda:2"]' wallet_hotkeys='["miner_1", "miner_2", "miner_3"]'
-   ```
-
-2. **Automatic Instance Creation**:
-   - Separate directories: `templar-0`, `templar-1`, `templar-2`
-   - Individual environment configurations per GPU
-   - Dedicated services for each GPU instance
-
-3. **Service Management**:
-   - Systemd: `miner-0.service`, `miner-1.service`, etc.
-   - Nohup: Separate processes per GPU
-
-## Post-Installation
-
-After successful deployment:
-
-1. **Check Service Status** (if using systemd):
-   ```bash
-   sudo systemctl status miner.service
-   ```
-
-2. **View Logs**:
-   - Systemd: `sudo journalctl -u miner.service -f`
-   - Nohup: Check `miner_loop.log` in the templar directory
-
-3. **Monitor Performance**:
-   - Use Weights & Biases dashboard
-   - Check GPU utilization with `nvidia-smi` or `nvtop`
-
-## Customization
-
-### Adding Packages
-
-In your vault file or via command line:
-
-```yaml
-additional_apt_packages:
-  - tmux
-  - nethogs
-
-additional_pip_packages:
-  - numpy
-  - pandas
-```
-
-### Modifying Templates
-
-The playbook uses Jinja2 templates for:
-- `.env` file configuration
-- `run.sh` script
-- systemd service files
-
-These can be customized in the `roles/templar/templates/` directory.
+---
 
 ## Troubleshooting
 
-### Common Issues
+- **CUDA Out of Memory**: Reduce `--actual_batch_size` in your run command.
+- **Network Synchronization Issues**: Verify your network connection and ensure the correct `NETWORK` and `NETUID` are set.
+- **Registration Failures**: Make sure your wallet is properly registered and funded.
 
-1. **SSH Connection Failed**:
-   - Verify SSH access: `ssh ubuntu@host_ip`
-   - Check inventory file for correct user and port
+---
 
-2. **Vault Password Issues**:
-   - Ensure vault file is encrypted: `ansible-vault view group_vars/all/vault.yml`
-   - Re-encrypt if needed: `ansible-vault rekey group_vars/all/vault.yml`
+## Miner Operations
 
-3. **CUDA Not Found**:
-   - Verify CUDA installation on target host
-   - Check `nvidia-smi` output
+### Model Synchronization
 
-4. **Service Fails to Start**:
-   - Check logs for errors
-   - Verify all environment variables are set correctly
-   - Ensure wallet keys exist on the host
+- The miner synchronizes its model with the latest global state at startup.
+- Attempts to load the latest checkpoint from the validator with the highest stake.
 
-### Security Best Practices
+### Training Process
 
-1. **Keep Sensitive Files Secure**:
-   - Add to `.gitignore`:
-     ```
-     inventory
-     group_vars/all/vault.yml
-     ```
+- Data is deterministically assigned based on the miner's UID and the current window.
+- The miner trains on its assigned data and computes gradients.
 
-2. **Use Strong Vault Passwords**:
-   - Generate secure passwords for vault encryption
-   - Store vault password securely
+### Gradient Sharing
 
-3. **Limit SSH Access**:
-   - Use SSH keys instead of passwords
-   - Configure firewall rules appropriately
+- Gradients are compressed and shared with peers via the communication module.
+- The miner gathers gradients from peers, decompresses them, and updates its model.
 
-## Additional Resources
-
-- [Ansible Documentation](https://docs.ansible.com/ansible/latest/)
-- [Templar Documentation](./README.md)
-- [Dataset Setup Guide](./r2_dataset.md)
-- [Manual Miner Setup](./miner.md)
+---
