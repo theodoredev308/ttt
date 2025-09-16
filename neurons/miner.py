@@ -238,9 +238,18 @@ class Miner(BaseNode, Trainer):
                 self.owned_params.add(n)
                 # For DTensors, create error feedback based on full tensor since TP is not supported
                 self.error_feedback[n] = None
-                self.error_feedback_cpu_buffers[n] = torch.empty(
-                    p.shape, device="cpu", pin_memory=True
-                )
+                # Create CPU buffer with pinning, with fallback if CUDA context issues
+                try:
+                    torch.cuda.set_device(self.device)  # Ensure CUDA context is initialized
+                    torch.cuda.synchronize(self.device)  # Ensure CUDA is ready
+                    self.error_feedback_cpu_buffers[n] = torch.empty(
+                        p.shape, device="cpu", pin_memory=True
+                    )
+                except Exception as e:
+                    tplr.logger.warning(f"Failed to create pinned memory buffer for {n}, using regular CPU memory: {e}")
+                    self.error_feedback_cpu_buffers[n] = torch.empty(
+                        p.shape, device="cpu", pin_memory=False
+                    )
 
             enc = self.transformer.encode(
                 torch.empty(p.shape, dtype=torch.float16, device=self.device),
@@ -411,9 +420,9 @@ class Miner(BaseNode, Trainer):
             self.model_initialized = True
 
         # Handle catch-up and scheduler replay using consolidated logic
-        await tplr.neurons.handle_checkpoint_catchup(
-            self, ckpt_ok, ckpt_sync_win, ckpt_global_step, from_bootstrap,
-        )
+        # await tplr.neurons.handle_checkpoint_catchup(
+        #     self, ckpt_ok, ckpt_sync_win, ckpt_global_step, from_bootstrap,
+        # )
 
         self.comms.start_commitment_fetcher()
 
@@ -423,13 +432,17 @@ class Miner(BaseNode, Trainer):
         )
 
         # Initialize datasets (only rank 0 downloads, handled internally by dataset_manager)
+        print("init datasets")
         _ = await self.dataset_manager.initialize_datasets(current_shard)
     
         # Synchronize all ranks after dataset initialization
+        tplr.logger.info("before safe barrier")
         dist_helper.safe_barrier("dataset_init_complete", self.local_rank)
+        tplr.logger.info("after safe barrier and start set_dataloader")
 
         # All workers need to instantiate dataloader
         self.set_dataloader()
+        tplr.logger.info("after set_dataloader")
 
         # Put a dummy gradient to mark this miner as active for validators
         if self.is_master:

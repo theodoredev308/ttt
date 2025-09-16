@@ -19,7 +19,7 @@
 
     "early_stop_blocks": 6,
 
-    "change_learning_rate": 1,
+    "change_learning_rate": 0,
     "type": "adamw",
     "batch_size": 208,
     "learning_rate": 2e-4,

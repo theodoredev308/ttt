@@ -62,8 +62,9 @@ class SharedShardedDataset(Dataset):
             shard_index, file_prefix=file_prefix
         )
         _ = self.check_paths([self.tokens_file, self.ids_file])
+        print(f"check paths passed {self.rank}")
         _ = self.mmap_tokens_and_ids(token_dtype)
-
+        print(f"mmap tokens and ids passed {self.rank}")
         # should wrap in a timer
         tplr.logger.info(
             f"[Dataset] rank {self.rank}: init done in {time.perf_counter() - t0:.1f}s "
@@ -124,22 +125,29 @@ class SharedShardedDataset(Dataset):
         # ────────────────────────── mmap tokens & ids ───────────────────────────
         tokens_path = Path(self.tokens_file)
         ids_path = Path(self.ids_file)
-
+        print(f"tokens path: {tokens_path}")
+        print(f"ids path: {ids_path}")
         # Tokens: support .npy (NumPy format) and raw .bin
         if tokens_path.suffix == ".npy":
             # Correct way to memory-map a NumPy .npy file
             arr = np.load(tokens_path, mmap_mode="r", allow_pickle=False)
+            if arr.dtype != np.uint32:
+                arr = arr.view(np.uint32)
+            print("load done")
             # Ensure dtype is uint32 (no copy if already correct)
             if arr.dtype != np.uint32:
+                print(f"{arr.dtype} != np.uint32")
                 arr = arr.astype(np.uint32, copy=False)
+                print(f"arr.dtype: {arr.dtype}")
             tokens_mem = arr
+            print(f"suffix is npy")
         else:
             # Raw binary: assume little-endian uint32 from preprocessing
             tokens_mem = np.memmap(tokens_path, dtype=np.dtype("<u4"), mode="r")
-
+            print(f"suffix is bin")
         # IDs sidecar: always raw binary uint64 little-endian
         ids_mem = np.memmap(ids_path, dtype=np.dtype("<u8"), mode="r")
-
+        print(f"ids mem: {ids_mem}")
         # Wrap as torch tensors (zero-copy views)
         self.tokens = torch.from_numpy(tokens_mem)  # dtype: torch.uint32
         self.sample_ids = torch.from_numpy(ids_mem).to(torch.uint64)
@@ -155,8 +163,11 @@ class SharedShardedDataset(Dataset):
         # The authoritative sample count comes from ids file
         self.total_samples = int(self.sample_ids.shape[0])
 
+        print(f"total tokens: {total_tokens}")
+
         # Optional cross-check (warn if mismatch rather than crash)
         expected_tokens = self.total_samples * self.seqlen
+        print(f"expected tokens: {expected_tokens}, {self.total_samples}, {self.seqlen}")
         if expected_tokens != total_tokens:
             tplr.logger.warning(
                 f"[Dataset] tokens != ids*seqlen: tokens={total_tokens}, "
@@ -287,11 +298,12 @@ class ShardedDatasetManager:
             An instance of `SharedShardedDataset`.
         """
         # Only rank 0 downloads the shard, others wait
+        print("hrere")
         if self.rank == 0:
             download_task = self.prepare_shard(shard_index)
             await download_task
         # Non-master ranks will just check if files exist (downloaded by rank 0)
-
+        print("here2")
         dataset = SharedShardedDataset(
             shard_index=shard_index,
             sequence_length=self.sequence_length,
@@ -300,6 +312,7 @@ class ShardedDatasetManager:
             token_dtype=self.token_dtype,
             file_prefix=self.file_prefix,
         )
+        print("here3")
         return dataset
 
     async def initialize_datasets(self, current_shard_index: int) -> None:
@@ -311,15 +324,19 @@ class ShardedDatasetManager:
         Args:
             current_shard_index: The index of the shard to make active.
         """
+        print("before create dataset")
         self.active_dataset = await self.create_dataset(current_shard_index)
         next_shard = (current_shard_index + 1) % self.max_dataset_idx
+        print(f"active_dataset: {self.active_dataset}")
 
         # Only rank 0 prepares the next shard to avoid duplicate downloads
         if self.rank == 0:
             self.upcoming_dataset = self.prepare_shard(next_shard)
+            print(f"upcoming_dataset: {self.upcoming_dataset}")
         else:
             # Non-master ranks create a dummy completed task
             self.upcoming_dataset = asyncio.create_task(asyncio.sleep(0))
+            print(f"upcoming_dataset: {self.upcoming_dataset}")
         return
 
     async def swap_datasets(self) -> int:

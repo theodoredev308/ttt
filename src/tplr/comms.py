@@ -1219,10 +1219,10 @@ class Comms(ChainManager):
         """
         file_size_gb = file_size / (1024 * 1024 * 1024)
 
-        if file_size_gb > 100:  # ≥100 GB
+        if file_size_gb > 10:  # ≥100 GB
             chunk_size = 512 * 1024 * 1024  # 512 MB
             max_workers = min(32, max(8, CPU_COUNT))
-        elif file_size_gb > 10:  # 10–100 GB
+        elif file_size_gb > 5:  # 10–100 GB
             chunk_size = 256 * 1024 * 1024  # 256 MB
             max_workers = min(16, max(8, CPU_COUNT))
         else:  # <10 GB
