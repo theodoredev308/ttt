@@ -430,7 +430,7 @@ class Trainer:
         Move inner optimizer state tensors (e.g., AdamW exp_avg, exp_avg_sq) to pinned CPU memory.
         Safe to call after an inner step finishes and before gradient compression.
         """
-        if not getattr(self.hparams, "offload_optimizer_states", True):
+        if not getattr(self.hparams, "offload_optimizer_states", False):
             return
         opt = getattr(self, "inner_optimizer", None)
         if opt is None or getattr(self, "_inner_opt_offloaded", False):
@@ -467,7 +467,7 @@ class Trainer:
         Move inner optimizer state tensors back to GPU (device) asynchronously.
         Call at the very start of inner_steps() before any optimizer.step().
         """
-        if not getattr(self.hparams, "offload_optimizer_states", True):
+        if not getattr(self.hparams, "offload_optimizer_states", False):
             return
         opt = getattr(self, "inner_optimizer", None)
         if opt is None or not getattr(self, "_inner_opt_offloaded", False):
@@ -651,7 +651,6 @@ class Trainer:
 
                     if window_changed:
                         tplr.logger.info(f"now_time: {now_time}, last_time: {last_time}, window_changed: {window_changed}")
-
 
                 # ------------------------------------------------------------------ #
                 # 4. Decide *together* whether to take an optimiser step

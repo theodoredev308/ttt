@@ -238,18 +238,9 @@ class Miner(BaseNode, Trainer):
                 self.owned_params.add(n)
                 # For DTensors, create error feedback based on full tensor since TP is not supported
                 self.error_feedback[n] = None
-                # Create CPU buffer with pinning, with fallback if CUDA context issues
-                try:
-                    torch.cuda.set_device(self.device)  # Ensure CUDA context is initialized
-                    torch.cuda.synchronize(self.device)  # Ensure CUDA is ready
-                    self.error_feedback_cpu_buffers[n] = torch.empty(
-                        p.shape, device="cpu", pin_memory=True
-                    )
-                except Exception as e:
-                    tplr.logger.warning(f"Failed to create pinned memory buffer for {n}, using regular CPU memory: {e}")
-                    self.error_feedback_cpu_buffers[n] = torch.empty(
-                        p.shape, device="cpu", pin_memory=False
-                    )
+                self.error_feedback_cpu_buffers[n] = torch.empty(
+                    p.shape, device="cpu", pin_memory=False
+                )
 
             enc = self.transformer.encode(
                 torch.empty(p.shape, dtype=torch.float16, device=self.device),
@@ -353,7 +344,7 @@ class Miner(BaseNode, Trainer):
             rank=self.local_rank,
             world_size=self.world_size,
             comms=self.comms,
-            token_dtype=np.uint32, # Match preprocessing script dtype
+            token_dtype=np.uint32,  # Match preprocessing script dtype
         )
         self.outer_steps_per_shard = getattr(self.hparams, "outer_steps_per_shard")
 
@@ -420,9 +411,9 @@ class Miner(BaseNode, Trainer):
             self.model_initialized = True
 
         # Handle catch-up and scheduler replay using consolidated logic
-        # await tplr.neurons.handle_checkpoint_catchup(
-        #     self, ckpt_ok, ckpt_sync_win, ckpt_global_step, from_bootstrap,
-        # )
+        await tplr.neurons.handle_checkpoint_catchup(
+            self, ckpt_ok, ckpt_sync_win, ckpt_global_step, from_bootstrap,
+        )
 
         self.comms.start_commitment_fetcher()
 
@@ -432,17 +423,13 @@ class Miner(BaseNode, Trainer):
         )
 
         # Initialize datasets (only rank 0 downloads, handled internally by dataset_manager)
-        print("init datasets")
         _ = await self.dataset_manager.initialize_datasets(current_shard)
-    
+
         # Synchronize all ranks after dataset initialization
-        tplr.logger.info("before safe barrier")
         dist_helper.safe_barrier("dataset_init_complete", self.local_rank)
-        tplr.logger.info("after safe barrier and start set_dataloader")
 
         # All workers need to instantiate dataloader
         self.set_dataloader()
-        tplr.logger.info("after set_dataloader")
 
         # Put a dummy gradient to mark this miner as active for validators
         if self.is_master:
@@ -496,16 +483,25 @@ class Miner(BaseNode, Trainer):
                 self.set_dataloader()
                 dist_helper.safe_barrier("sync_shard_switch", self.local_rank)
 
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
             data_loading_time = tplr.T() - data_start
             tplr.logger.info(
                 f"{tplr.P(step_window, data_loading_time)} Loaded training data"
             )
+
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
             # Offload parameters to CPU before inner_steps
             offload_start = time.time()
             params_offloaded, param_specs = dist_helper.get_offloaded_params(self.model)
             offload_time = time.time() - offload_start
             tplr.logger.info(f"Parameter offload to CPU took {offload_time:.4f}s")
+
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
             # 3. Accumulate gradients over batches
             train_start = tplr.T()
@@ -541,6 +537,9 @@ class Miner(BaseNode, Trainer):
                 time_passed = time.time() - self.last_time
                 tplr.logger.info(f"Time passed since last_time: {time_passed:.2f}")
 
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
             res = await self.inner_steps(
                 loader=self.loader,
                 step_window=step_window,
@@ -548,7 +547,10 @@ class Miner(BaseNode, Trainer):
                 null_round=null_round,
             )
 
-            # Restore parameters to CPU after inner_steps
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+            # Restore parameters from CPU after inner_steps
             restore_start = time.time()
             dist_helper.restore_offloaded_params(
                 self.model, params_offloaded, param_specs
@@ -561,27 +563,21 @@ class Miner(BaseNode, Trainer):
             n_batches = res["batch_count"]
             window_tokens = res["batch_tokens"]
 
-            # Synchronise all ranks
-            dist_helper.safe_barrier("pre_gather", self.local_rank)
-
-            try:
-                self.offload_inner_optimizer_states()
-            except Exception:
-                tplr.logger.warning(
-                    "Optimizer-state offload failed; continuing.", exc_info=True
-                )
-
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+            # Synchronise all ranks
+            dist_helper.safe_barrier("pre_gather", self.local_rank)
 
             # 1️⃣ every rank builds its momentum shard
             compress_start = tplr.T()
             self.log_gpu_memory("Before prepare_gradient_dict")
             torch.cuda.reset_peak_memory_stats(self.device)
 
+            tplr.logger.info("Before prepare_gradient_dict")
             shard_gradient, _, _ = tplr.prepare_gradient_dict(
                 self, step_window, null_round
             )
+            tplr.logger.info("After prepare_gradient_dict")
 
             peak = torch.cuda.max_memory_allocated(self.device) / 1024**3
             self.log_gpu_memory("After prepare_gradient_dict")
@@ -649,13 +645,12 @@ class Miner(BaseNode, Trainer):
             tplr.logger.info(f"Stopped accumulating: {n_batches} batches")
             dist_helper.safe_barrier("post_gather", self.local_rank)
 
-            # If training finishes early, wait until the *next* chain-window starts.
             if self.current_window == step_window:
                 tplr.logger.info(
                     "Training complete; waiting for window to be exhausted..."
                 )
                 await self.wait_until_window(step_window + 1)
-            
+
             if self.is_master:
                 put_start = tplr.T()
                 await self.comms.put(
@@ -757,9 +752,25 @@ class Miner(BaseNode, Trainer):
             # ---------------------------------------------------------------------
 
             # 8. Apply gathered gradients
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
             update_start = tplr.T()
+
+            # torch.cuda.empty_cache()
+            # torch.cuda.synchronize()
+
+            # # Free VRAM pressure during compression by offloading inner opt states to CPU
+            # # (they are not needed until the next inner_steps call).
+            # try:
+            #     self.offload_inner_optimizer_states()
+            # except Exception:
+            #     tplr.logger.warning(
+            #         "Optimizer-state offload failed; continuing.", exc_info=True
+            #     )
+
+            # torch.cuda.empty_cache()
+            # torch.cuda.synchronize()
+            for _, p in self.model.named_parameters():
+                if p.grad is not None:
+                    p.grad = None
 
             # Only perform outer step and increment counter if we have gradients to apply
             if should_update:

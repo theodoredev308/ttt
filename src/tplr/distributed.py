@@ -398,7 +398,7 @@ class DistributedHelper:
                         ):
                             # Reuse a single pinned buffer per param across windows
                             cpu_buf = torch.empty_like(
-                                src_local, device="cpu", pin_memory=True
+                                src_local, device="cpu", pin_memory=False
                             )
                             setattr(p, "_cpu_offload_buf", cpu_buf)
                         cpu_buf.copy_(
@@ -428,7 +428,7 @@ class DistributedHelper:
                             or cpu_buf.device.type != "cpu"
                         ):
                             cpu_buf = torch.empty_like(
-                                src, device="cpu", pin_memory=True
+                                src, device="cpu", pin_memory=False
                             )
                             setattr(p, "_cpu_offload_buf", cpu_buf)
                         cpu_buf.copy_(src, non_blocking=True)

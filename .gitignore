@@ -1,6 +1,6 @@
 .env.yaml
 *.pth
-remote/
+tokenized/
 checkpoints/
 
 # Python
