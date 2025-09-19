@@ -42,7 +42,7 @@
     "openskill_beta": 7,
     "openskill_tau": 0.1,
     "checkpoint_init_version": "2.1.1",
-    "checkpoint_init_window": 51591,
+    "checkpoint_init_window": 51721,
     "num_evaluation_bins": 5,
     "quantization_bins": 4,
     "quantization_range": 6,

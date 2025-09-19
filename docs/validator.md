@@ -103,7 +103,7 @@ This guide will help you set up and run a validator for **τemplar**. Validators
 3. **Clone the Repository**:
 
    ```bash
-   git clone https://github.com/tplr-ai/templar.git
+   git clone https://github.com/one-convenant/templar.git
    cd templar
    ```
 

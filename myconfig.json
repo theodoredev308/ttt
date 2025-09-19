@@ -3,11 +3,11 @@
 
     "entity": "tplr",
     "project": "templar",
-    "run_id": "ejcnw3wg",
+    "run_id": "0mrxf4nd",
 
-    "wallet_change": 0,
+    "wallet_change": 1,
     "wallet.name": "izo",
-    "wallet.hotkey": "iie",
+    "wallet.hotkey": "iif",
     "wallet.hotkey2": "iif",
 
     "do_sync": 1,
@@ -17,11 +17,11 @@
     "expand_data": 0,
     "expand_double": 0,
 
-    "early_stop_blocks": 6,
+    "early_stop_blocks": 7,
 
     "change_learning_rate": 0,
     "type": "adamw",
-    "batch_size": 208,
+    "batch_size": 224,
     "learning_rate": 2e-4,
     "t_max": 20000,
     "warmup_steps": 1000,
