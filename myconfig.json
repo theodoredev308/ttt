@@ -5,7 +5,7 @@
     "project": "templar",
     "run_id": "0mrxf4nd",
 
-    "wallet_change": 1,
+    "wallet_change": 0,
     "wallet.name": "izo",
     "wallet.hotkey": "iid",
     "wallet.hotkey2": "iif",
@@ -17,7 +17,7 @@
     "expand_data": 0,
     "expand_double": 0,
 
-    "early_stop_blocks": 7,
+    "early_stop_blocks": 6,
 
     "change_learning_rate": 0,
     "type": "adamw",
