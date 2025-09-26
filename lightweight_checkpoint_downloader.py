@@ -421,15 +421,18 @@ class LightweightCheckpointDownloader:
         checkpoints_dir = output_dir / "checkpoints" / str(version)
         if not checkpoints_dir.exists():
             return False
+        def _has_files(directory: Path) -> bool:
+            return any(f.is_file() for f in directory.iterdir()) if directory.exists() else False
+
         if window is not None:
             window_dir = checkpoints_dir / str(window)
-            if window_dir.exists() and any(window_dir.iterdir()):
+            if window_dir.exists() and _has_files(window_dir):
                 tplr.logger.info(f"Checkpoint for window {window} already exists locally at {window_dir}")
                 return True
             return False
         # If window is None, check for any window directory with files
         for subdir in checkpoints_dir.iterdir():
-            if subdir.is_dir() and any(subdir.iterdir()):
+            if subdir.is_dir() and _has_files(subdir):
                 tplr.logger.info(f"Checkpoint already exists locally at {subdir}")
                 return True
         return False
