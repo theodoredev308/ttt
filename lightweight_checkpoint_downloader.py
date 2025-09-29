@@ -459,6 +459,7 @@ class LightweightCheckpointDownloader:
             
             # Download specified window or latest
             target_window = self.config.checkpoint_window
+            # target_window = 52335
             if target_window is None:
                 target_window = max(available_windows)
                 tplr.logger.info(f"Using latest window: {target_window}")

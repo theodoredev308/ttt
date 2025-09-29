@@ -1,0 +1,1 @@
+python3 neurons/fake.py --wallet.name izo --wallet.hotkey iia

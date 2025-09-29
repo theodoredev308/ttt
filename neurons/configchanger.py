@@ -408,7 +408,7 @@ class ConfigChanger(BaseNode):
                 self.log_with_level(f"Error loading auto config: {e}", WARNING_LEVEL)
                 auto_config = {
                     "total_num": 3,
-                    "run_id": ["iia", "iid", "iif"],
+                    "run_id": ["iia", "iib", "iif"],
                     "vibe_len": 3
                 }
 
@@ -426,6 +426,14 @@ class ConfigChanger(BaseNode):
             val //= auto_config["vibe_len"]
             config_data["wallet.hotkey"] = auto_config["run_id"][val]
             change_str += " -> " + auto_config["run_id"][val]
+
+            submit_uids_str = auto_config["run_id"]
+            str_uid = {"iia": 248, "iib": 213, "iic": 55, "iid": 212, "iie": 227, "iif": 69}
+            # Remove the current wallet.hotkey from the list of submit_uids_str
+            if config_data.get("wallet.hotkey") in submit_uids_str:
+                submit_uids_str = [uid for uid in submit_uids_str if uid != config_data["wallet.hotkey"]]
+            submit_uids = [str_uid[uid] for uid in submit_uids_str]
+            config_data["submit_uid"] = submit_uids
 
             self.log_with_level(f"Successfully changed: {change_str}", SUCCESS_LEVEL)
 

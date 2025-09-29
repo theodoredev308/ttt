@@ -12,7 +12,7 @@
     "shuffle": 0,
     "expand_data": 0,
     "expand_double": 0,
-    "early_stop_blocks": 8,
+    "early_stop_blocks": 6,
     "change_learning_rate": 0,
     "type": "adamw",
     "batch_size": 216,
