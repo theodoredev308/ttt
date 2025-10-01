@@ -5,9 +5,8 @@
     "run_id": "60wg58qc",
     "wallet_change": 1,
     "wallet.name": "izo",
-    "wallet.hotkey": "iif",
+    "wallet.hotkey": "iib",
     "wallet.hotkey2": "iif",
-    "do_sync": 1,
     "test_evaluation": 0,
     "shuffle": 0,
     "expand_data": 0,
@@ -21,9 +20,17 @@
     "warmup_steps": 1000,
     "upload_start": 1,
     "submit_uid": [
+        212,
+        69,
+        248
+    ],
+    "sync_uid": [
         248,
+        212,
+        69,
         213
     ],
+    "do_sync": 1,
     "alpha_A": 0.5,
     "alpha_B": 0.5,
     "change_first": 1

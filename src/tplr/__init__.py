@@ -38,3 +38,4 @@ from .sharded_sampler import EvalSampler, MinerSampler
 from .dcp_checkpoint import DCPCheckpointer
 from . import muon
 from . import distributed
+from .wandbinfo import WanDBInfo

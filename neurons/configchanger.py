@@ -404,6 +404,7 @@ class ConfigChanger(BaseNode):
             try:
                 with open("auto.json", "r") as f:
                     auto_config = json.load(f)
+                self.log_with_level(f"Auto config Loaded", SUCCESS_LEVEL)
             except Exception as e:
                 self.log_with_level(f"Error loading auto config: {e}", WARNING_LEVEL)
                 auto_config = {

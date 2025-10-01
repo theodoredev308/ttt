@@ -2,6 +2,7 @@
 *.pth
 tokenized/
 checkpoints/
+gradient_storage/
 
 # Python
 __pycache__/
