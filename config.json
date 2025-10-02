@@ -2,10 +2,10 @@
     "total_runs": 2,
     "entity": "tplr",
     "project": "templar",
-    "run_id": "60wg58qc",
+    "run_id": "p9urpz85",
     "wallet_change": 1,
     "wallet.name": "izo",
-    "wallet.hotkey": "iia",
+    "wallet.hotkey": "iib",
     "wallet.hotkey2": "iif",
     "test_evaluation": 0,
     "shuffle": 0,
@@ -22,7 +22,7 @@
     "submit_uid": [
         212,
         69,
-        213
+        248
     ],
     "sync_uid": [
         248,

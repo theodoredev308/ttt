@@ -239,7 +239,7 @@ class Fake(BaseNode):
         try:
             # Get all UIDs from metagraph except self
             all_uids = list(range(1, len(self.comms.metagraph.S)))
-            available_peers = [uid for uid in all_uids if uid != self.uid and uid != self.uid2]
+            available_peers = [uid for uid in all_uids if uid != self.uid]
             
             if self.config.test:
                 self.log_with_level("Test mode: Using all peers from metagraph", INFO_LEVEL)
