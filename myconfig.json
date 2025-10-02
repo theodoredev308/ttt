@@ -5,7 +5,7 @@
     "run_id": "60wg58qc",
     "wallet_change": 1,
     "wallet.name": "izo",
-    "wallet.hotkey": "iib",
+    "wallet.hotkey": "iia",
     "wallet.hotkey2": "iif",
     "test_evaluation": 0,
     "shuffle": 0,
@@ -14,7 +14,7 @@
     "early_stop_blocks": 6,
     "change_learning_rate": 0,
     "type": "adamw",
-    "batch_size": 216,
+    "batch_size": 224,
     "learning_rate": 0.0002,
     "t_max": 20000,
     "warmup_steps": 1000,
@@ -22,6 +22,7 @@
     "submit_uid": [
         212,
         69,
+        213,
         248
     ],
     "sync_uid": [
