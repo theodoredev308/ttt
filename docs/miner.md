@@ -184,7 +184,8 @@ This guide will help you set up and run a miner for **τemplar**. We'll cover bo
 8. **Run the Miner**:
 
    ```bash
-   python neurons/miner.py \
+   torchrun -standalone --nnodes 1 --nproc_per_node 8 \
+     neurons/miner.py \
      --actual_batch_size 6 \
      --wallet.name default \
      --wallet.hotkey miner \

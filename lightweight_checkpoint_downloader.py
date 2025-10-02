@@ -450,7 +450,7 @@ class LightweightCheckpointDownloader:
             
             # List available checkpoints
             available_windows = await self.list_available_checkpoints()
-            
+
             if not available_windows:
                 tplr.logger.warning("No checkpoints found in standard location")
                 await self.check_alternative_locations()
@@ -459,7 +459,7 @@ class LightweightCheckpointDownloader:
             
             # Download specified window or latest
             target_window = self.config.checkpoint_window
-            # target_window = 52335
+
             if target_window is None:
                 target_window = max(available_windows)
                 tplr.logger.info(f"Using latest window: {target_window}")

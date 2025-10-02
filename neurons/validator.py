@@ -1393,6 +1393,8 @@ class Validator(BaseNode, Trainer):
             mean_final_intended = 0.0
             mean_final_actual = 0.0
             reserve_used = 0
+            gather_peers_positive_ratio = 0.0
+            gather_peers_with_history = 0
 
             if self.is_master and gather_result is not None:
                 actual_gather_uids = list(gather_result.uids)
@@ -1414,6 +1416,40 @@ class Validator(BaseNode, Trainer):
                         if uid in self.comms.reserve_peers
                     ]
                 )
+
+                # Calculate how many gather peers have >50% positive evaluations
+                gather_peers_above_threshold = 0
+                for uid in actual_gather_uids:
+                    if uid in self.peer_eval_history:
+                        window = self.peer_eval_history[uid]
+                        if (
+                            len(window) >= 10
+                        ):  # Only count peers with sufficient history
+                            gather_peers_with_history += 1
+                            neg_count = sum(window)  # True=1 for negative
+                            positive_ratio = 1 - (neg_count / len(window))
+                            if positive_ratio > 0.5:  # More than 50% positive
+                                gather_peers_above_threshold += 1
+
+                # Calculate percentage of gather peers with >50% positive
+                if gather_peers_with_history > 0:
+                    gather_peers_positive_ratio = (
+                        gather_peers_above_threshold / gather_peers_with_history
+                    )
+
+                    # Log summary of gather peer performance
+                    tplr.log_with_context(
+                        level="info",
+                        message=(
+                            f"Gather peers performance: {gather_peers_above_threshold}/{gather_peers_with_history} "
+                            f"({gather_peers_positive_ratio:.1%}) have >50% positive evals in last 20 windows"
+                        ),
+                        sync_window=self.sync_window,
+                        current_window=self.current_window,
+                        gather_peers_above_threshold=gather_peers_above_threshold,
+                        gather_peers_with_history=gather_peers_with_history,
+                        positive_ratio_pct=gather_peers_positive_ratio * 100,
+                    )
 
             # Only master evaluates miner sync and applies slashing
             if self.is_master:
@@ -2376,6 +2412,8 @@ class Validator(BaseNode, Trainer):
                     "validator/gather/intended_mean_final": mean_final_intended,
                     "validator/gather/actual_mean_final": mean_final_actual,
                     "validator/gather/reserve_used": reserve_used,
+                    "validator/gather/peers_positive_ratio": gather_peers_positive_ratio
+                    * 100,
                 }
                 self.wandb.log(evaluation_metrics, step=self.global_step)
 
@@ -2492,13 +2530,28 @@ class Validator(BaseNode, Trainer):
             )
 
             # 1. Create a dictionary of active peers with non-zero incentive
-            
+            # Also filter out peers that should be excluded from gathering
             uid_to_incentive = {}
+            excluded_uids = []
             for uid, incentive in zip(
                 self.comms.metagraph.uids.tolist(), self.comms.metagraph.I.tolist()
             ):
-                if incentive > 0 and uid in self.comms.active_peers:
-                    uid_to_incentive[uid] = float(incentive)
+                if uid in self.comms.active_peers:
+                    # Check if peer should be excluded
+                    if self.should_exclude_from_gather(uid):
+                        excluded_uids.append(uid)
+                        continue
+                    if incentive > 0:
+                        uid_to_incentive[uid] = float(incentive)
+
+            # Log excluded peers
+            if excluded_uids:
+                tplr.log_with_context(
+                    level="info",
+                    message=f"Excluding {len(excluded_uids)} peers from initial selection due to consecutive negative evals: {excluded_uids}",
+                    sync_window=self.sync_window,
+                    current_window=self.current_window,
+                )
 
             reserve_cnt = self.hparams.reserve_peer_count
             total_needed = self.hparams.gather_peer_count + reserve_cnt
@@ -2526,8 +2579,11 @@ class Validator(BaseNode, Trainer):
                 return gather_peers, reserve_peers
 
             # 2. If needed, fill up with active peers that don't have incentive
+            # Also exclude peers with consecutive negative evaluations
             remaining_active_peers = [
-                int(peer) for peer in self.comms.active_peers if peer not in ranked
+                int(peer)
+                for peer in self.comms.active_peers
+                if peer not in ranked and not self.should_exclude_from_gather(peer)
             ]
 
             # Calculate how many more peers we need
@@ -2542,9 +2598,14 @@ class Validator(BaseNode, Trainer):
             ranked.extend(additional_peers)
 
             # If still short, pad with more random actives (if any)
+            # Still excluding peers with consecutive negative evaluations
             if len(ranked) < total_needed:
                 pad_needed = total_needed - len(ranked)
-                pool = [p for p in self.comms.active_peers if p not in ranked]
+                pool = [
+                    p
+                    for p in self.comms.active_peers
+                    if p not in ranked and not self.should_exclude_from_gather(p)
+                ]
                 ranked.extend(random.sample(pool, min(pad_needed, len(pool))))
 
             gather_peers = ranked[: self.hparams.gather_peer_count]
@@ -2592,22 +2653,51 @@ class Validator(BaseNode, Trainer):
         3) Select up to gather_peer_count
         4) If not enough high-weight peers, fill remaining with random active peers
         """
-        # Get all active peers as a list
-        active_peers = [
-            int(peer)
-            for peer in self.comms.active_peers
-            if peer not in self.naughty_peers
-        ]
+        # Get all active peers as a list, excluding those with consecutive negative evaluations
+        excluded_uids = []
+        active_peers = []
+        for peer in self.comms.active_peers:
+            peer_id = int(peer)
+            if peer_id in self.naughty_peers:
+                continue
+            if self.should_exclude_from_gather(peer_id):
+                excluded_uids.append(peer_id)
+                continue
+            active_peers.append(peer_id)
 
-        # Check if we have enough active peers
-        if len(active_peers) < self.hparams.minimum_peers:
+        # Log excluded peers
+        if excluded_uids:
             tplr.log_with_context(
                 level="info",
-                message=f"Not enough active peers ({len(active_peers)}) to meet minimum requirement ({self.hparams.minimum_peers})",
+                message=f"Excluding {len(excluded_uids)} peers from next selection due to consecutive negative evals: {excluded_uids}",
                 sync_window=self.sync_window,
                 current_window=self.current_window,
             )
-            return None
+
+        # Check if we have enough active peers after exclusions
+        if len(active_peers) < self.hparams.minimum_peers:
+            # If we don't have enough peers after exclusions, we might need to use some excluded peers
+            # Log a warning and fall back to using best available peers
+            tplr.log_with_context(
+                level="warning",
+                message=f"Not enough active peers ({len(active_peers)}) after exclusions to meet minimum requirement ({self.hparams.minimum_peers}). "
+                f"Will use best available peers including some with negative evaluations.",
+                sync_window=self.sync_window,
+                current_window=self.current_window,
+            )
+
+            # Add back excluded peers sorted by their consecutive negative count (lowest first)
+            if excluded_uids:
+                sorted_excluded = sorted(
+                    excluded_uids,
+                    key=lambda uid: self.consecutive_negative_count.get(uid, 0),
+                )
+                needed = self.hparams.minimum_peers - len(active_peers)
+                active_peers.extend(sorted_excluded[:needed])
+
+            # If still not enough, return None
+            if len(active_peers) < self.hparams.minimum_peers:
+                return None
 
         # Create list of (peer_id, weight) tuples
         peer_weights = []
