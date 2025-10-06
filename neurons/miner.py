@@ -156,13 +156,17 @@ class Miner(BaseNode, Trainer):
         try:
             with open(file_path, "r") as f:
                 config_data = json.load(f)
+            self.old_myconfig = config_data
             return config_data
         except FileNotFoundError:
             tplr.logger.error(f"CRITICAL: Config file not found at {file_path}")
-            raise
+            config_data = self.old_myconfig
+            tplr.logger.warning(f"Using old myconfig: {config_data}")
         except Exception as e:
             tplr.logger.error(f"Error loading {file_path}: {e}")
-            raise
+            config_data = self.old_myconfig
+            tplr.logger.warning(f"Using old myconfig: {config_data}")
+        return config_data
 
     def log_with_level(self, message: str, level: int = 0):
         tplr.logger.info(f"\033[{97 - level}m{message}\033[0m")
@@ -842,13 +846,16 @@ class Miner(BaseNode, Trainer):
                     )
 
                 # Store the debug dictionary
-                await self.comms.put(
-                    state_dict=debug_dict,
-                    uid=str(self.uid),
-                    window=step_window,
-                    key="debug",
-                    local=False,
-                )
+                myconfig = self.load_config_from_file(os.path.join(self.ckpt.repo_root, "myconfig.json"))
+                sync_uid = myconfig["sync_uid"]
+                for uid in sync_uid:
+                    await self.comms.put(
+                        state_dict=debug_dict,
+                        uid=str(uid),
+                        window=step_window,
+                        key="debug",
+                        local=False,
+                    )
 
                 tplr.logger.info(
                     f"Stored debug values for window {self.current_window}"

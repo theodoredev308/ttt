@@ -38,7 +38,7 @@ TIME_LEVEL = 3
 SUCCESS_LEVEL = 5
 WARNING_LEVEL = 6
 
-class ConfigChanger(BaseNode):
+class LightweightDownloader(BaseNode):
     def log_with_level(self, message: str, level: int = 0):
         tplr.logger.info(f"\033[{97 - level}m{message}\033[0m")
 
@@ -125,10 +125,10 @@ class ConfigChanger(BaseNode):
             raise
 
     def __init__(self):
-        tplr.logger.debug("Starting config changer initialization...")
+        tplr.logger.debug("Starting lightweight downloader initialization...")
 
         # Init config
-        self.config = ConfigChanger.miner_config()
+        self.config = LightweightDownloader.miner_config()
 
         config_data = self.load_config_from_file("myconfig.json")
 
@@ -191,16 +191,23 @@ class ConfigChanger(BaseNode):
         self.gradient_storage_dir = self.config.gradient_storage_dir
         self.max_gradients = self.config.max_gradients
         self.current_gradient_index = 0
+
         
+        self.ckpt = tplr.dcp_checkpoint.DCPCheckpointer(
+            comms=self.comms,
+            uid=self.uid,
+            version=tplr.__version__,
+        )
+
         # Create storage directory
         os.makedirs(self.gradient_storage_dir, exist_ok=True)
         
         # Clean old gradients on startup
-        self.cleanup_old_gradients()
+        # self.cleanup_old_gradients()
 
         self.number = {248:1, 213:2, 55:3, 212:4, 227:5, 69:6}
 
-        self.log_with_level("[Init] ✔ Config changer ready – entering run()", SUCCESS_LEVEL)
+        self.log_with_level("[Init] ✔ Lightweight downloader ready – entering run()", SUCCESS_LEVEL)
 
     async def download_gradient_from_peer(self, window: int, uid: int) -> dict | None:
         """Download gradient from a specific peer for the given window"""
@@ -396,56 +403,8 @@ class ConfigChanger(BaseNode):
         window_offset = self.current_window - (self.start_window or self.current_window)
 
         self.log_with_level(f"Starting with global_step=0, window offset={window_offset}", INFO_LEVEL)
-        config_data = self.load_config_from_file("myconfig.json")
-        with open("config.json", "w") as f:
-            f.write(json.dumps(config_data, indent=4))
 
         while not self.stop_event.is_set():
-            try:
-                with open("auto.json", "r") as f:
-                    auto_config = json.load(f)
-                self.log_with_level(f"Auto config Loaded", SUCCESS_LEVEL)
-            except Exception as e:
-                self.log_with_level(f"Error loading auto config: {e}", WARNING_LEVEL)
-                auto_config = {
-                    "total_num": 3,
-                    "run_id": ["iia", "iib", "iic"],
-                    "vibe_len": 3
-                }
-
-            config_data = self.load_config_from_file("myconfig.json")
-
-            change_str = ""
-
-            if self.current_window % auto_config["vibe_len"] == 0:
-                config_data["wallet_change"] = 1
-                change_str += "wallet_changed"
-            else:
-                config_data["wallet_change"] = 0
-
-            val = self.current_window % (auto_config["total_num"] * auto_config["vibe_len"])
-            val //= auto_config["vibe_len"]
-            config_data["wallet.hotkey"] = auto_config["run_id"][val]
-            change_str += " -> " + auto_config["run_id"][val]
-
-            submit_uids_str = auto_config["run_id"]
-            str_uid = {"iia": 248, "iib": 213, "iic": 55, "iid": 212, "iie": 227, "iif": 69}
-            # Remove the current wallet.hotkey from the list of submit_uids_str
-            submit_uids = [str_uid[uid] for uid in submit_uids_str]
-            config_data["sync_uid"] = submit_uids
-            submit_uids = [str_uid[uid] for uid in submit_uids_str if uid != config_data["wallet.hotkey"]]
-            config_data["submit_uid"] = submit_uids
-            change_str += " -> [" + ", ".join(str(uid) for uid in submit_uids) + "]"
-
-            self.log_with_level(f"Successfully changed: {change_str}", SUCCESS_LEVEL)
-
-
-            with open("myconfig.json", "w") as f:
-                f.write(json.dumps(config_data, indent=4))
-
-            upload_start = config_data["upload_start"]
-            await asyncio.sleep(0)
-            
             # Initialize window
             window_start = tplr.T()
             step_window = self.current_window
@@ -460,7 +419,80 @@ class ConfigChanger(BaseNode):
             self.log_with_level(
                 f"Window {step_window} completed in {window_total_time:.2f}s", TIME_LEVEL
             )
+
+            # Download checkpoint if it exists
+            tplr.logger.info("Download checkpoint...")
+            latest_window = await self.ckpt._discover_latest(
+                prefer_highest_staked=True
+            )
+            self.log_with_level(f"Latest window: {latest_window}", INFO_LEVEL)
+
+            if latest_window is not None:
+                tplr.logger.info(f"Downloading checkpoint for window: {latest_window}")
+                await self.ckpt.download_distributed(
+                    window=latest_window,
+                    prefer_highest_staked=True
+                )
+                self.log_with_level("Downloaded checkpoint", SUCCESS_LEVEL)
+                # After successful download, remove all previously downloaded checkpoints
+                # to free up storage and avoid redundancy.
+                for i in range(latest_window - 1000, latest_window - 1):
+                    if os.path.exists(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}")):
+                        shutil.rmtree(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}"))
+                        self.log_with_level(f"Removed old checkpoint: {i}", INFO_LEVEL)
+            else:
+                tplr.logger.info("No checkpoint found")
+
+            # Download aggregator if it exists
             
+            retries = 10
+
+            while retries > 0:
+                tplr.logger.info(f"Downloading aggregator with retries {retries}...")
+                fetch = await self.comms.get(
+                    uid=str(1),
+                    window=step_window - 1,
+                    key="aggregator",
+                    local=False,
+                    stale_retention=100,
+                )
+                # tplr.logger.info(f"Fetch: {fetch}")
+                if fetch.success and fetch.data is not None and "state_dict" in fetch.data:
+                    self.log_with_level("Downloaded aggregator", SUCCESS_LEVEL)
+                # Save fetch to the local aggregator/{version}-{window}.aggregator
+                if fetch.data is not None and "state_dict" in fetch.data:
+                    aggregator_dir = os.path.join(self.ckpt.repo_root, "aggregator")
+                    print(f"aggregator_dir: {aggregator_dir}")
+                    os.makedirs(aggregator_dir, exist_ok=True)
+                    version = getattr(self.ckpt, "version", tplr.__version__)
+                    print(f"version: {version}")
+                    aggregator_path = os.path.join(
+                        aggregator_dir, f"{version}-{step_window - 1}.aggregator"
+                    )
+                    print(f"aggregator_path: {aggregator_path}")
+                    try:
+                        with open(aggregator_path, "wb") as f:
+                            pickle.dump(fetch.data, f)
+                        self.log_with_level(f"Aggregator saved to {aggregator_path}", SUCCESS_LEVEL)
+                        break
+                    except Exception as e:
+                        self.log_with_level(f"Failed to save aggregator: {e}", WARNING_LEVEL)
+                        retries -= 1
+                else:
+                    self.log_with_level("Failed to download aggregator", WARNING_LEVEL)
+                    retries -= 1
+                await asyncio.sleep(60)
+            if retries > 0:
+                self.log_with_level("Downloaded aggregator", SUCCESS_LEVEL)
+            else:
+                self.log_with_level("Failed to download aggregator", WARNING_LEVEL)
+
+            # Delete old aggregator which is behind the last checkpoint
+            for i in range(step_window - 1000, latest_window - 1):
+                if os.path.exists(os.path.join(self.ckpt.repo_root, "aggregator", f"{tplr.__version__}-{i}.aggregator")):
+                    os.remove(os.path.join(self.ckpt.repo_root, "aggregator", f"{tplr.__version__}-{i}.aggregator"))
+                    self.log_with_level(f"Removed old aggregator: {i}", INFO_LEVEL)
+
             # Wait for next window
             tplr.logger.info(f"Waiting for next window... {step_window + 1}")
             await self.wait_until_window(step_window + 1)
@@ -474,10 +506,10 @@ def load_config_from_file(file_path: str):
         config_data.update(config)
     return config_data
 
-# Start simple miner.
+# Start lightweight downloader.
 if __name__ == "__main__":
     uvloop.install()
     try:
-        asyncio.run(ConfigChanger().main())
+        asyncio.run(LightweightDownloader().main())
     except KeyboardInterrupt:
         pass

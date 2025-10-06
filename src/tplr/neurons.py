@@ -824,15 +824,47 @@ async def catchup_with_aggregation_server(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            fetch = await instance.comms.get(
-                uid=str(leader_uid),
-                window=start_w,
-                key="aggregator",
-                timeout=60,
-                local=False,
-                stale_retention=10,
-                map_location=catchup_device,
-            )
+            import os
+            import pickle
+
+            aggregator_dir = os.path.join(instance.ckpt.repo_root, "aggregator")
+            version = getattr(instance.ckpt, "version", tplr.__version__) if hasattr(instance, "ckpt") else tplr.__version__
+            aggregator_path = os.path.join(aggregator_dir, f"{version}-{start_w}.aggregator")
+
+            if os.path.exists(aggregator_path):
+                tplr.logger.info(f"Loading aggregator from local file: {aggregator_path}")
+                try:
+                    with open(aggregator_path, "rb") as f:
+                        loaded_data = pickle.load(f)
+                    # Emulate the same type as comms.get returns (SimpleNamespace with .success and .data)
+                    fetch = SimpleNamespace(
+                        success=True,
+                        data=loaded_data
+                    )
+                except Exception as e:
+                    tplr.logger.warning(f"Failed to load local aggregator: {e}")
+                    fetch = SimpleNamespace(success=False, data=None)
+            else:
+                tplr.logger.info(f"Aggregator file not found locally, downloading: {aggregator_path}")
+                fetch = await instance.comms.get(
+                    uid=str(leader_uid),
+                    window=start_w,
+                    key="aggregator",
+                    timeout=60,
+                    local=False,
+                    stale_retention=10,
+                    map_location=catchup_device,
+                )
+
+            # fetch = await instance.comms.get(
+            #     uid=str(leader_uid),
+            #     window=start_w,
+            #     key="aggregator",
+            #     timeout=60,
+            #     local=False,
+            #     stale_retention=10,
+            #     map_location=catchup_device,
+            # )
 
             # ── A. aggregated object exists → normal path ────────────────────
             if fetch.success and fetch.data is not None and "state_dict" in fetch.data:

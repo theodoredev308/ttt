@@ -3,6 +3,7 @@
 tokenized/
 checkpoints/
 gradient_storage/
+aggregator/
 
 # Python
 __pycache__/

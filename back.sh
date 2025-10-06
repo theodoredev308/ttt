@@ -1,0 +1,1 @@
+python3 neurons/lightweight_download_checkpoint_and_aggregator.py --wallet.name izo -wallet.hotkey iia

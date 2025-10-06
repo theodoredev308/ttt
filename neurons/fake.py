@@ -452,72 +452,72 @@ class Fake(BaseNode):
             my_config = self.load_config_from_file("myconfig.json")
             upload_start = my_config["upload_start"]
             if upload_start == 1:
-                await self.submit_gradient_with_delay(step_window, 60, first=True)
+                await self.submit_gradient_with_delay(step_window, 120, first=True)
 
-            await self.wandb_sync()
-            debug_result, debug_global_step = None, None
-            sync_scores, sync_uids = self.wandb_info.get_sync_score(), self.wandb_info.get_sync_score_uids(20)
-            self.log_with_level(f"Sync uids: {sync_uids}", INFO_LEVEL)
+            # await self.wandb_sync()
+            # debug_result, debug_global_step = None, None
+            # sync_scores, sync_uids = self.wandb_info.get_sync_score(), self.wandb_info.get_sync_score_uids(20)
+            # self.log_with_level(f"Sync uids: {sync_uids}", INFO_LEVEL)
 
-            temp_sync_uids = [int(uid) for uid in sync_uids if sync_scores[uid] == 1.0]
-            if len(temp_sync_uids) == 0:
-                tplr.logger.info("No uids are 1.0. just gathere from non-top")
-                eval_uids = sync_uids[:10]
-            else:
-                eval_uids = temp_sync_uids[:10]
+            # temp_sync_uids = [int(uid) for uid in sync_uids if sync_scores[uid] == 1.0]
+            # if len(temp_sync_uids) == 0:
+            #     tplr.logger.info("No uids are 1.0. just gathere from non-top")
+            #     eval_uids = sync_uids[:10]
+            # else:
+            #     eval_uids = temp_sync_uids[:10]
 
-            self.log_with_level(f"Gathering from {eval_uids}", 1)
-            count, loop_count = 0, 0
-            debug_dict = {}
-            debug_dict_score = 0.0
+            # self.log_with_level(f"Gathering from {eval_uids}", 1)
+            # count, loop_count = 0, 0
+            # debug_dict = {}
+            # debug_dict_score = 0.0
 
-            self.config_data = self.load_config_from_file("myconfig.json")
-            do_sync = self.config_data["do_sync"] # default NO
-            if do_sync == 1:
-                self.log_with_level("Do", 1)
-            else:
-                self.log_with_level("Not Do", WARNING_LEVEL)
+            # self.config_data = self.load_config_from_file("myconfig.json")
+            # do_sync = self.config_data["do_sync"] # default NO
+            # if do_sync == 1:
+            #     self.log_with_level("Do", 1)
+            # else:
+            #     self.log_with_level("Not Do", WARNING_LEVEL)
 
-            while do_sync == 1 and count < 1 and len(eval_uids) > 0:
-                loop_count += 1
-                if loop_count % 20 == 0:
-                    tplr.logger.info(f"Loop count is {loop_count}")
-                for uid in eval_uids:
-                    result = await self.comms.get(
-                        uid=str(uid),
-                        window=step_window,
-                        key="debug",
-                        local=False,
-                        stale_retention=10,
-                    )
-                    if not result.success:
-                        continue
-                    else:
-                        result = cast(dict, result.data)
-                        debug_dict = result
-                        print(f"uid is {uid}")
-                        debug_dict_score = sync_scores[uid]
-                        count += 1
-                    if count >= 1:
-                        break
-                if loop_count > 200:
-                    break
+            # while do_sync == 1 and count < 1 and len(eval_uids) > 0:
+            #     loop_count += 1
+            #     if loop_count % 20 == 0:
+            #         tplr.logger.info(f"Loop count is {loop_count}")
+            #     for uid in eval_uids:
+            #         result = await self.comms.get(
+            #             uid=str(uid),
+            #             window=step_window,
+            #             key="debug",
+            #             local=False,
+            #             stale_retention=10,
+            #         )
+            #         if not result.success:
+            #             continue
+            #         else:
+            #             result = cast(dict, result.data)
+            #             debug_dict = result
+            #             print(f"uid is {uid}")
+            #             debug_dict_score = sync_scores[uid]
+            #             count += 1
+            #         if count >= 1:
+            #             break
+            #     if loop_count > 200:
+            #         break
             
-            if debug_dict is not None:
-                config_data = self.load_config_from_file("myconfig.json")
-                submit_uids = config_data["sync_uid"]
-                for uid in submit_uids:
-                    await self.comms.put(
-                        state_dict=debug_dict,
-                        uid=str(uid),
-                        window=step_window,
-                        key="debug",
-                        local=False,
-                        stale_retention=100,
-                    )
-                    tplr.logger.info(f"{tplr.T()} Submitting debug dict for UID {uid}")
-            else:
-                tplr.logger.info(f"Debug dict is None. Failed to get debug dict")
+            # if debug_dict is not None:
+            #     config_data = self.load_config_from_file("myconfig.json")
+            #     submit_uids = config_data["sync_uid"]
+            #     for uid in submit_uids:
+            #         await self.comms.put(
+            #             state_dict=debug_dict,
+            #             uid=str(uid),
+            #             window=step_window,
+            #             key="debug",
+            #             local=False,
+            #             stale_retention=100,
+            #         )
+            #         tplr.logger.info(f"{tplr.T()} Submitting debug dict for UID {uid}")
+            # else:
+            #     tplr.logger.info(f"Debug dict is None. Failed to get debug dict")
 
 
     async def wandb_sync(self):

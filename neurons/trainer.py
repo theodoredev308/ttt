@@ -400,13 +400,17 @@ class Trainer:
         try:
             with open(file_path, "r") as f:
                 config_data = json.load(f)
+            self.old_myconfig = config_data
             return config_data
         except FileNotFoundError:
             tplr.logger.error(f"CRITICAL: Config file not found at {file_path}")
-            raise
+            config_data = self.old_myconfig
+            tplr.logger.warning(f"Using old myconfig: {config_data}")
         except Exception as e:
             tplr.logger.error(f"Error loading {file_path}: {e}")
-            raise
+            config_data = self.old_myconfig
+            tplr.logger.warning(f"Using old myconfig: {config_data}")
+        return config_data
 
     # ------------------------------------------------------------------
     # Optimizer-state offload/prefetch (CPU <-> GPU) for inner optimizer

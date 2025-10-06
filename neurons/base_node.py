@@ -5,6 +5,7 @@ import os
 import signal
 import threading
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any, cast
@@ -44,6 +45,49 @@ class BaseNode(abc.ABC):
         self._bg_tasks: set[asyncio.Task] = set()
         self._threads: list[threading.Thread] = []
         self.last_time = None
+        try:
+            with open("myconfig.json", "r") as f:
+                my_config = json.load(f)
+            self.last_time = my_config["last_window_time"]
+            now = time.time()
+            while self.last_time + 12 * self.hparams.blocks_per_window < now:
+                self.last_time += 12 * self.hparams.blocks_per_window
+            print(f"last_time = {self.last_time}")
+        except Exception as e:
+            self.last_time = None
+        self.old_myconfig = {
+            "total_runs": 2,
+            "entity": "tplr",
+            "project": "templar",
+            "run_id": "z54qxtxa",
+            "wallet_change": 1,
+            "wallet.name": "izo",
+            "wallet.hotkey": "iia",
+            "wallet.hotkey2": "iib",
+            "test_evaluation": 0,
+            "shuffle": 0,
+            "expand_data": 0,
+            "expand_double": 0,
+            "early_stop_blocks": 7,
+            "change_learning_rate": 0,
+            "type": "adamw",
+            "batch_size": 208,
+            "learning_rate": 0.0002,
+            "t_max": 20000,
+            "warmup_steps": 1000,
+            "upload_start": 1,
+            "submit_uid": [
+                213, 55, 212, 227, 69
+            ],
+            "sync_uid": [
+                248, 213, 55, 212, 227, 69
+            ],
+            "do_sync": 1,
+            "alpha_A": 0.5,
+            "alpha_B": 0.5,
+            "change_first": 1,
+            "last_window_time": 1759763821.9126246
+        }
 
         # window signalling (initialised in main)
         self.window_changed = None
@@ -264,6 +308,11 @@ class BaseNode(abc.ABC):
                         self.comms.current_window = self.current_window
                     tplr.logger.info(f"▶ window → {self.current_window}")
                     self.last_time = time.time()
+                    print(f"time = {self.last_time}")
+                    my_config = self.load_config_from_file("myconfig.json")
+                    my_config["last_window_time"] = self.last_time
+                    with open("myconfig.json", "w") as f:
+                        f.write(json.dumps(my_config, indent=4))
 
                     # notify any awaiters
                     if self.window_changed and self._notify_loop:
