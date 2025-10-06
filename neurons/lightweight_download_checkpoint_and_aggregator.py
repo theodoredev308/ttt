@@ -420,33 +420,8 @@ class LightweightDownloader(BaseNode):
                 f"Window {step_window} completed in {window_total_time:.2f}s", TIME_LEVEL
             )
 
-            # Download checkpoint if it exists
-            tplr.logger.info("Download checkpoint...")
-            latest_window = await self.ckpt._discover_latest(
-                prefer_highest_staked=True
-            )
-            self.log_with_level(f"Latest window: {latest_window}", INFO_LEVEL)
-
-            if latest_window is not None:
-                tplr.logger.info(f"Downloading checkpoint for window: {latest_window}")
-                await self.ckpt.download_distributed(
-                    window=latest_window,
-                    prefer_highest_staked=True
-                )
-                self.log_with_level("Downloaded checkpoint", SUCCESS_LEVEL)
-                # After successful download, remove all previously downloaded checkpoints
-                # to free up storage and avoid redundancy.
-                for i in range(latest_window - 1000, latest_window - 1):
-                    if os.path.exists(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}")):
-                        shutil.rmtree(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}"))
-                        self.log_with_level(f"Removed old checkpoint: {i}", INFO_LEVEL)
-            else:
-                tplr.logger.info("No checkpoint found")
-
             # Download aggregator if it exists
-            
             retries = 10
-
             while retries > 0:
                 tplr.logger.info(f"Downloading aggregator with retries {retries}...")
                 fetch = await self.comms.get(
@@ -487,11 +462,41 @@ class LightweightDownloader(BaseNode):
             else:
                 self.log_with_level("Failed to download aggregator", WARNING_LEVEL)
 
-            # Delete old aggregator which is behind the last checkpoint
-            for i in range(step_window - 1000, latest_window - 1):
-                if os.path.exists(os.path.join(self.ckpt.repo_root, "aggregator", f"{tplr.__version__}-{i}.aggregator")):
-                    os.remove(os.path.join(self.ckpt.repo_root, "aggregator", f"{tplr.__version__}-{i}.aggregator"))
-                    self.log_with_level(f"Removed old aggregator: {i}", INFO_LEVEL)
+            # Download checkpoint if it exists
+            tplr.logger.info("Download checkpoint...")
+            retries = 10
+            while retries > 0:
+                tplr.logger.info(f"Trying to download checkpoint with retries {retries}...")
+                latest_window = await self.ckpt._discover_latest(
+                    prefer_highest_staked=True
+                )
+                self.log_with_level(f"Latest window: {latest_window}", INFO_LEVEL)
+
+                if latest_window is not None:
+                    tplr.logger.info(f"Downloading checkpoint for window: {latest_window}")
+                    await self.ckpt.download_distributed(
+                        window=latest_window,
+                        prefer_highest_staked=True
+                    )
+
+                    # if self.ckpt.
+
+                    self.log_with_level("Downloaded checkpoint", SUCCESS_LEVEL)
+                    
+                    # After successful download, remove all previously downloaded checkpoints
+                    # to free up storage and avoid redundancy.
+                    for i in range(latest_window - 1000, latest_window - 1):
+                        if os.path.exists(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}")):
+                            shutil.rmtree(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}"))
+                            self.log_with_level(f"Removed old checkpoint: {i}", INFO_LEVEL)
+                    for i in range(latest_window - 1000, latest_window - 1):
+                        if os.path.exists(os.path.join(self.ckpt.repo_root, f"aggregator/{tplr.__version__}-{i}.aggregator")):
+                            shutil.rmtree(os.path.join(self.ckpt.repo_root, f"aggregator/{tplr.__version__}-{i}.aggregator"))
+                            self.log_with_level(f"Removed old aggregator: {i}", INFO_LEVEL)
+                    break
+                else:
+                    tplr.logger.info("No checkpoint found")
+                retries -= 1
 
             # Wait for next window
             tplr.logger.info(f"Waiting for next window... {step_window + 1}")

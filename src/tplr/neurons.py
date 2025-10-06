@@ -841,6 +841,7 @@ async def catchup_with_aggregation_server(
                         success=True,
                         data=loaded_data
                     )
+                    tplr.logger.info(f"Loaded aggregator from local file: {aggregator_path}")
                 except Exception as e:
                     tplr.logger.warning(f"Failed to load local aggregator: {e}")
                     fetch = SimpleNamespace(success=False, data=None)
