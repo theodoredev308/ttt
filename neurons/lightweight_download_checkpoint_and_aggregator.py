@@ -479,19 +479,56 @@ class LightweightDownloader(BaseNode):
                         prefer_highest_staked=True
                     )
 
-                    # if self.ckpt.
+                    # Check that all required checkpoint files exist
+                    checkpoint_dir = os.path.join(
+                        self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{latest_window}"
+                    )
+                    required_files = [
+                        "__0_0.distcp",
+                        "__1_0.distcp",
+                        "__2_0.distcp",
+                        "__3_0.distcp",
+                        ".metadata",
+                        "extra_metadata.json",
+                    ]
+                    missing_files = []
+                    for fname in required_files:
+                        fpath = os.path.join(checkpoint_dir, fname)
+                        if not os.path.exists(fpath):
+                            missing_files.append(fname)
+                    if missing_files:
+                        self.log_with_level(
+                            f"Missing checkpoint files for window {latest_window}: {', '.join(missing_files)}",
+                            WARNING_LEVEL
+                        )
+                    else:
+                        self.log_with_level(
+                            f"All checkpoint files exist for window {latest_window}",
+                            SUCCESS_LEVEL
+                        )
 
                     self.log_with_level("Downloaded checkpoint", SUCCESS_LEVEL)
                     
                     # After successful download, remove all previously downloaded checkpoints
                     # to free up storage and avoid redundancy.
                     for i in range(latest_window - 1000, latest_window - 1):
-                        if os.path.exists(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}")):
-                            shutil.rmtree(os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}"))
+                        checkpoint_path = os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}")
+                        if os.path.exists(checkpoint_path):
+                            try:
+                                shutil.rmtree(checkpoint_path)
+                            except Exception as e:
+                                self.log_with_level(f"Failed to remove old checkpoint: {e}", WARNING_LEVEL)
                             self.log_with_level(f"Removed old checkpoint: {i}", INFO_LEVEL)
-                    for i in range(latest_window - 1000, latest_window - 1):
-                        if os.path.exists(os.path.join(self.ckpt.repo_root, f"aggregator/{tplr.__version__}-{i}.aggregator")):
-                            shutil.rmtree(os.path.join(self.ckpt.repo_root, f"aggregator/{tplr.__version__}-{i}.aggregator"))
+                    for i in range(latest_window - 1000, latest_window):
+                        aggregator_path = os.path.join(self.ckpt.repo_root, f"aggregator/{tplr.__version__}-{i}.aggregator")
+                        if os.path.exists(aggregator_path):
+                            try:
+                                if os.path.isdir(aggregator_path):
+                                    shutil.rmtree(aggregator_path)
+                                else:
+                                    os.remove(aggregator_path)
+                            except Exception as e:
+                                self.log_with_level(f"Failed to remove old aggregator: {e}", WARNING_LEVEL)
                             self.log_with_level(f"Removed old aggregator: {i}", INFO_LEVEL)
                     break
                 else:

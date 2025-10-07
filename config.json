@@ -3,10 +3,10 @@
     "entity": "tplr",
     "project": "templar",
     "run_id": "udnmflbj",
-    "wallet_change": 1,
+    "wallet_change": 0,
     "wallet.name": "izo",
-    "wallet.hotkey": "iic",
-    "wallet.hotkey2": "iib",
+    "wallet.hotkey": "iid",
+    "wallet.hotkey2": "iic",
     "test_evaluation": 0,
     "shuffle": 0,
     "expand_data": 0,
@@ -20,19 +20,18 @@
     "warmup_steps": 1000,
     "upload_start": 1,
     "submit_uid": [
-        227,
-        212,
-        248
+        248,
+        213,
+        69
     ],
     "sync_uid": [
         248,
-        55,
+        213,
         212,
-        227
+        69
     ],
-    "do_sync": 1,
     "alpha_A": 0.5,
     "alpha_B": 0.5,
     "change_first": 1,
-    "last_window_time": 1759773482.341246
+    "last_window_time": 1759820402.397335
 }

@@ -443,9 +443,20 @@ class ConfigChanger(BaseNode):
             with open("myconfig.json", "w") as f:
                 f.write(json.dumps(config_data, indent=4))
 
-            upload_start = config_data["upload_start"]
             await asyncio.sleep(0)
-            
+
+            # await self.wandb_sync()
+            # check_uids = config_data["sync_uid"]
+            # sync_scores, sync_uids = self.wandb_info.get_sync_score(), self.wandb_info.get_sync_score_uids(20)
+            # minval = 2.0
+            # for uid in check_uids:
+            #     if uid in sync_uids:
+            #         minval = min(minval, sync_scores[uid])
+            # if minval < 2.0:
+            #     config_data["upload_start"] = 1
+            # else:
+            #     config_data["upload_start"] = 0
+
             # Initialize window
             window_start = tplr.T()
             step_window = self.current_window
