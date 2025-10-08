@@ -206,6 +206,11 @@ class Fake(BaseNode):
         # Clean old gradients on startup
         self.cleanup_old_gradients()
 
+        self.ckpt = tplr.DCPCheckpointer(
+            comms=self.comms,
+            uid=self.uid,
+            version=tplr.__version__,
+        )
         self.number = {248:1, 213:2, 55:3, 212:4, 227:5, 69:6}
 
         self.log_with_level("[Init] ✔ Simple miner ready – entering run()", SUCCESS_LEVEL)

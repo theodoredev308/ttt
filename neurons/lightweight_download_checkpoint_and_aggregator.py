@@ -193,7 +193,7 @@ class LightweightDownloader(BaseNode):
         self.current_gradient_index = 0
 
         
-        self.ckpt = tplr.dcp_checkpoint.DCPCheckpointer(
+        self.ckpt = tplr.DCPCheckpointer(
             comms=self.comms,
             uid=self.uid,
             version=tplr.__version__,
@@ -511,11 +511,13 @@ class LightweightDownloader(BaseNode):
                     
                     # After successful download, remove all previously downloaded checkpoints
                     # to free up storage and avoid redundancy.
+                    is_new_checkpoint = False
                     for i in range(latest_window - 1000, latest_window - 1):
                         checkpoint_path = os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}")
                         if os.path.exists(checkpoint_path):
                             try:
                                 shutil.rmtree(checkpoint_path)
+                                is_new_checkpoint = True
                             except Exception as e:
                                 self.log_with_level(f"Failed to remove old checkpoint: {e}", WARNING_LEVEL)
                             self.log_with_level(f"Removed old checkpoint: {i}", INFO_LEVEL)
@@ -530,6 +532,12 @@ class LightweightDownloader(BaseNode):
                             except Exception as e:
                                 self.log_with_level(f"Failed to remove old aggregator: {e}", WARNING_LEVEL)
                             self.log_with_level(f"Removed old aggregator: {i}", INFO_LEVEL)
+                    print(f"is_new_checkpoint: {is_new_checkpoint}")
+                    # is is_new_checkpoint is True, then restart miner
+                    if is_new_checkpoint:
+                        self.log_with_level("Restarting miner", INFO_LEVEL)
+                        os.system("pm2 stop 2 && sleep 20 && pm2 start 2")
+                        self.log_with_level("Restarted miner", SUCCESS_LEVEL)
                     break
                 else:
                     tplr.logger.info("No checkpoint found")

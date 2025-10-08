@@ -200,6 +200,12 @@ class ConfigChanger(BaseNode):
 
         self.number = {248:1, 213:2, 55:3, 212:4, 227:5, 69:6}
 
+        self.ckpt = tplr.DCPCheckpointer(
+            comms=self.comms,
+            uid=self.uid,
+            version=tplr.__version__,
+        )
+
         self.log_with_level("[Init] ✔ Config changer ready – entering run()", SUCCESS_LEVEL)
 
     async def download_gradient_from_peer(self, window: int, uid: int) -> dict | None:

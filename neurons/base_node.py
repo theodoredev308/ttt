@@ -85,8 +85,7 @@ class BaseNode(abc.ABC):
             "do_sync": 1,
             "alpha_A": 0.5,
             "alpha_B": 0.5,
-            "change_first": 1,
-            "last_window_time": 1759763821.9126246
+            "change_first": 1
         }
 
         # window signalling (initialised in main)
@@ -308,11 +307,6 @@ class BaseNode(abc.ABC):
                         self.comms.current_window = self.current_window
                     tplr.logger.info(f"▶ window → {self.current_window}")
                     self.last_time = time.time()
-                    print(f"time = {self.last_time}")
-                    my_config = self.load_config_from_file("myconfig.json")
-                    my_config["last_window_time"] = self.last_time
-                    with open("myconfig.json", "w") as f:
-                        f.write(json.dumps(my_config, indent=4))
 
                     # notify any awaiters
                     if self.window_changed and self._notify_loop:
