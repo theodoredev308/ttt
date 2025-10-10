@@ -5,7 +5,7 @@
     "run_id": "19dhco2n",
     "wallet_change": 1,
     "wallet.name": "izo",
-    "wallet.hotkey": "iid",
+    "wallet.hotkey": "iie",
     "wallet.hotkey2": "iic",
     "test_evaluation": 0,
     "shuffle": 0,
@@ -14,23 +14,21 @@
     "early_stop_blocks": 6,
     "change_learning_rate": 0,
     "type": "adamw",
-    "batch_size": 224,
+    "batch_size": 192,
     "learning_rate": 0.0002,
     "t_max": 20000,
     "warmup_steps": 1000,
     "upload_start": 1,
     "submit_uid": [
-        248,
-        213,
-        55
+        55,
+        248
     ],
     "sync_uid": [
-        212,
-        248,
-        213,
-        55
+        55,
+        227,
+        248
     ],
-    "do_sync": 1,
+    "do_sync": 0,
     "alpha_A": 0.5,
     "alpha_B": 0.5,
     "change_first": 1

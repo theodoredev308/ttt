@@ -1,5 +1,5 @@
 {
-    "total_num": 4,
-    "run_id": ["iib", "iie", "iia", "iic"],
+    "total_num": 3,
+    "run_id": ["iic", "iie", "iia"],
     "vibe_len": 1
 }

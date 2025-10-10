@@ -403,6 +403,8 @@ class LightweightDownloader(BaseNode):
         window_offset = self.current_window - (self.start_window or self.current_window)
 
         self.log_with_level(f"Starting with global_step=0, window offset={window_offset}", INFO_LEVEL)
+        latest_window = None
+        is_restart = False
 
         while not self.stop_event.is_set():
             # Initialize window
@@ -422,6 +424,20 @@ class LightweightDownloader(BaseNode):
 
             # Download aggregator if it exists
             retries = 10
+
+            # Check if aggregator file already exists; if so, skip download
+            aggregator_dir = os.path.join(self.ckpt.repo_root, "aggregator")
+            os.makedirs(aggregator_dir, exist_ok=True)
+            version = getattr(self.ckpt, "version", tplr.__version__)
+            aggregator_path = os.path.join(
+                aggregator_dir, f"{version}-{step_window - 1}.aggregator"
+            )
+            if os.path.exists(aggregator_path):
+                self.log_with_level(f"Aggregator already exists at {aggregator_path}, skipping download.", SUCCESS_LEVEL)
+                retries = -1
+            else:
+                retries = 10
+
             while retries > 0:
                 tplr.logger.info(f"Downloading aggregator with retries {retries}...")
                 fetch = await self.comms.get(
@@ -459,17 +475,38 @@ class LightweightDownloader(BaseNode):
                 await asyncio.sleep(60)
             if retries > 0:
                 self.log_with_level("Downloaded aggregator", SUCCESS_LEVEL)
-            else:
+            elif retries == 0:
                 self.log_with_level("Failed to download aggregator", WARNING_LEVEL)
+            else:
+                self.log_with_level("Skipped aggregator download", INFO_LEVEL)
 
             # Download checkpoint if it exists
             tplr.logger.info("Download checkpoint...")
             retries = 10
+            # Find latest checkpoint's window which is saved locally
+            checkpoints_root = os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}")
+            _latest_window = None
+            if os.path.exists(checkpoints_root):
+                windows = []
+                for name in os.listdir(checkpoints_root):
+                    if name.isdigit():
+                        windows.append(int(name))
+                if windows:
+                    _latest_window = max(windows)
+            
+            tplr.logger.info(f"Latest window: {_latest_window}")
             while retries > 0:
+                is_new_checkpoint = False
+                
                 tplr.logger.info(f"Trying to download checkpoint with retries {retries}...")
-                latest_window = await self.ckpt._discover_latest(
-                    prefer_highest_staked=True
-                )
+                latest_window = await self.ckpt._discover_latest(prefer_highest_staked=True)
+                tplr.logger.info(f"Latest window: {latest_window}")
+                tplr.logger.info(f"Check latest_window is changed: latest_window: {latest_window}, _latest_window: {_latest_window}")
+                if _latest_window == latest_window:
+                    self.log_with_level(f"Latest window is the same, skipping checkpoint download. latest_window: {latest_window}, _latest_window: {_latest_window}", INFO_LEVEL)
+                    await asyncio.sleep(50)
+                    retries -= 1
+                    continue
                 self.log_with_level(f"Latest window: {latest_window}", INFO_LEVEL)
 
                 if latest_window is not None:
@@ -511,7 +548,6 @@ class LightweightDownloader(BaseNode):
                     
                     # After successful download, remove all previously downloaded checkpoints
                     # to free up storage and avoid redundancy.
-                    is_new_checkpoint = False
                     for i in range(latest_window - 1000, latest_window - 1):
                         checkpoint_path = os.path.join(self.ckpt.repo_root, f"checkpoints/{tplr.__version__}/{i}")
                         if os.path.exists(checkpoint_path):
@@ -533,19 +569,40 @@ class LightweightDownloader(BaseNode):
                                 self.log_with_level(f"Failed to remove old aggregator: {e}", WARNING_LEVEL)
                             self.log_with_level(f"Removed old aggregator: {i}", INFO_LEVEL)
                     print(f"is_new_checkpoint: {is_new_checkpoint}")
-                    # is is_new_checkpoint is True, then restart miner
-                    if is_new_checkpoint:
-                        self.log_with_level("Restarting miner", INFO_LEVEL)
-                        os.system("pm2 stop 2 && sleep 20 && pm2 start 2")
-                        self.log_with_level("Restarted miner", SUCCESS_LEVEL)
+
                     break
                 else:
                     tplr.logger.info("No checkpoint found")
-                retries -= 1
+                    retries -= 1
 
             # Wait for next window
             tplr.logger.info(f"Waiting for next window... {step_window + 1}")
             await self.wait_until_window(step_window + 1)
+            if is_restart:
+                tplr.logger.info("Waiting for 200 seconds...")
+                await asyncio.sleep(200)
+                self.log_with_level("Restarting miner", INFO_LEVEL)
+                os.system("pm2 stop 0 && sleep 20 && pm2 start 0")
+
+                # Load configuration from auto.json
+                try:
+                    with open("auto.json", "r") as f:
+                        auto_config = json.load(f)
+                    self.log_with_level(f"Loaded auto.json: {auto_config}", INFO_LEVEL)
+
+                    # change run_id order. pop last and insert that to first
+                    # This block rotates the "run_id" list in auto.json by moving the last element to the front.
+                    if "run_id" in auto_config and isinstance(auto_config["run_id"], list) and auto_config["run_id"]:
+                        last = auto_config["run_id"].pop()
+                        auto_config["run_id"].insert(0, last)
+                        self.log_with_level(f"Reordered run_id (workspace): {auto_config['run_id']}", INFO_LEVEL)
+                    is_restart = False
+                except Exception as e:
+                    self.log_with_level(f"Failed to load auto.json: {e}", WARNING_LEVEL)
+
+                self.log_with_level("Restarted miner", SUCCESS_LEVEL)
+            if is_new_checkpoint:
+                is_restart = True
             tplr.logger.info(f"{tplr.T() - window_start} Completed waiting for next window")
             await asyncio.sleep(100)
 
