@@ -326,7 +326,7 @@ class Fake(BaseNode):
             return
 
         # Try to download from specified UID or random peer
-        target_uid = 9
+        target_uid = 74
         # if target_uid is None or target_uid not in peers:
         #     import random
         #     target_uid = random.choice(peers)

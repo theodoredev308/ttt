@@ -601,8 +601,6 @@ class LightweightDownloader(BaseNode):
                     self.log_with_level(f"Failed to load auto.json: {e}", WARNING_LEVEL)
 
                 self.log_with_level("Restarted miner", SUCCESS_LEVEL)
-            if is_new_checkpoint:
-                is_restart = True
             tplr.logger.info(f"{tplr.T() - window_start} Completed waiting for next window")
             await asyncio.sleep(100)
 

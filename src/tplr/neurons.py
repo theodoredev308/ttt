@@ -237,12 +237,15 @@ def outer_step(
     use_dct: bool = False,
     wandb_run: Run | None = None,
     global_step: int | None = None,
-) -> None:
+) -> dict | None:
     """
     Memory-minimizing variant:
       - Builds and applies ONE param's grad at a time.
       - Calls optimizer.step() per param (others have grad=None, so they're skipped).
       - Frees all temporaries and grad immediately after each step.
+
+    Returns:
+      Fingerprint dict containing gradient statistics (master rank only), or None.
     """
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
@@ -277,6 +280,17 @@ def outer_step(
     # optional stats
     min_median_norm = float("inf")
     max_median_norm = float("-inf")
+
+    # Initialize fingerprint accumulator (master rank only)
+    fingerprint: dict | None = None
+    if on_src:
+        fingerprint = {
+            "param_norms": {},
+            "param_means": {},
+            "total_norm_sq": 0.0,
+            "total_elements": 0,
+        }
+
 
     def _idx_to_device(obj, dev: str):
         """
@@ -359,6 +373,14 @@ def outer_step(
                 full_grad_src = full_grad_src.to(
                     dtype=p.dtype, device=p.device, non_blocking=True
                 )
+
+                # Accumulate fingerprint statistics for this parameter
+                if fingerprint is not None:
+                    param_norm = torch.norm(full_grad_src, p=2).item()
+                    fingerprint["param_norms"][name] = param_norm
+                    fingerprint["total_norm_sq"] += param_norm**2
+                    fingerprint["total_elements"] += full_grad_src.numel()
+                    fingerprint["param_means"][name] = full_grad_src.mean().item()
             finally:
                 # Free intermediate pieces ASAP (existence-guarded)
                 try:
@@ -451,6 +473,12 @@ def outer_step(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # Compute final fingerprint (master rank only)
+    if on_src and fingerprint is not None:
+        fingerprint["global_l2_norm"] = math.sqrt(fingerprint["total_norm_sq"])
+        return fingerprint
+    return None
+
 
 async def update_peers(instance: NeuronT, window: int, peer_start: float) -> None:
     # Check if peers list is empty and fetch previous list if needed
@@ -480,7 +508,7 @@ async def update_peers(instance: NeuronT, window: int, peer_start: float) -> Non
         and instance.peers_update_window  # they should be on bucket by now
         + instance.hparams.peer_replacement_frequency
         - window
-        < instance.hparams.peer_list_window_margin
+        <= instance.hparams.peer_list_window_margin
     ):
         result = await instance.comms.get_peer_list()
         if result is None:
@@ -1173,9 +1201,17 @@ async def compare_model_with_debug_dict(
     if not step_ratio_list:  # nothing compared
         median_steps = math.inf
         max_steps = math.inf
+        interquartile_mean_steps = math.inf
     else:
         all_steps = torch.cat([t.flatten() for t in step_ratio_list])
         median_steps = all_steps.median().item()
+
+        # Calculate interquartile mean (mean of values between Q1 and Q3)
+        q1 = all_steps.quantile(0.25).item()
+        q3 = all_steps.quantile(0.75).item()
+        # Filter values in the interquartile range
+        iqr_mask = (all_steps >= q1) & (all_steps <= q3)
+        interquartile_mean_steps = all_steps[iqr_mask].mean().item()
 
     return {
         "success": True,
@@ -1183,7 +1219,8 @@ async def compare_model_with_debug_dict(
         "avg_l2_norm": avg_l2_norm,
         "avg_abs_diff": avg_abs_diff,
         "max_diff": max_diff,
-        "avg_steps_behind": median_steps,
+        "avg_steps_behind": interquartile_mean_steps,
+        "interquartile_mean_steps_behind": interquartile_mean_steps,
         "max_steps_behind": max_steps,
         "param_count": param_count,
         "learning_rate": learning_rate,
