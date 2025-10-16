@@ -851,7 +851,7 @@ class Miner(BaseNode, Trainer):
                         "total_elements": gradient_fingerprint["total_elements"],
                         # Store only first 5 param norms to avoid bloat
                         "sample_param_norms": dict(
-                            list(gradient_fingerprint["param_norms"].item())[:5]
+                            list(gradient_fingerprint["param_norms"].items())[:5]
                         ),
                     }
 
@@ -875,6 +875,14 @@ class Miner(BaseNode, Trainer):
                         key="debug",
                         local=False,
                     )
+
+                await self.comms.put(
+                    state_dict=debug_dict,
+                    uid=str(self.uid),
+                    window=step_window,
+                    key="debug",
+                    local=False,
+                )
 
                 tplr.logger.info(
                     f"Stored debug values for window {self.current_window}"

@@ -578,7 +578,7 @@ class LightweightDownloader(BaseNode):
             # Wait for next window
             tplr.logger.info(f"Waiting for next window... {step_window + 1}")
             await self.wait_until_window(step_window + 1)
-            if is_restart:
+            if is_new_checkpoint:
                 tplr.logger.info("Waiting for 200 seconds...")
                 await asyncio.sleep(200)
                 self.log_with_level("Restarting miner", INFO_LEVEL)
@@ -596,7 +596,6 @@ class LightweightDownloader(BaseNode):
                         last = auto_config["run_id"].pop()
                         auto_config["run_id"].insert(0, last)
                         self.log_with_level(f"Reordered run_id (workspace): {auto_config['run_id']}", INFO_LEVEL)
-                    is_restart = False
                 except Exception as e:
                     self.log_with_level(f"Failed to load auto.json: {e}", WARNING_LEVEL)
 

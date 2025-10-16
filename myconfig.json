@@ -2,7 +2,7 @@
     "total_runs": 2,
     "entity": "tplr",
     "project": "templar",
-    "run_id": "4qsixqv3",
+    "run_id": "3py8c42p",
     "wallet_change": 0,
     "wallet.name": "izo",
     "wallet.hotkey": "iia",
@@ -14,14 +14,14 @@
     "early_stop_blocks": 6,
     "change_learning_rate": 0,
     "type": "adamw",
-    "batch_size": 176,
+    "batch_size": 168,
     "learning_rate": 0.0002,
     "t_max": 20000,
     "warmup_steps": 1000,
     "upload_start": 1,
     "submit_uid": [],
     "sync_uid": [
-        248
+        69
     ],
     "do_sync": 0,
     "alpha_A": 0.5,
