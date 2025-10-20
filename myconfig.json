@@ -4,8 +4,8 @@
     "project": "templar",
     "run_id": "3py8c42p",
     "wallet_change": 0,
-    "wallet.name": "izo",
-    "wallet.hotkey": "iia",
+    "wallet.name": "multisig-jjpes-atel",
+    "wallet.hotkey": "warm",
     "wallet.hotkey2": "iic",
     "test_evaluation": 0,
     "shuffle": 0,
@@ -21,7 +21,7 @@
     "upload_start": 1,
     "submit_uid": [],
     "sync_uid": [
-        69
+        60
     ],
     "do_sync": 0,
     "alpha_A": 0.5,
