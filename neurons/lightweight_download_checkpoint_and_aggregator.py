@@ -578,6 +578,7 @@ class LightweightDownloader(BaseNode):
             # Wait for next window
             tplr.logger.info(f"Waiting for next window... {step_window + 1}")
             await self.wait_until_window(step_window + 1)
+            is_new_checkpoint = False
             if is_new_checkpoint:
                 tplr.logger.info("Waiting for 200 seconds...")
                 await asyncio.sleep(200)

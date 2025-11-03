@@ -416,7 +416,8 @@ class Fake(BaseNode):
         )
         print(f"Gradients exist: {gradients_exist}")
         if not gradients_exist:
-            await self.download_and_save_gradient(self.current_window)
+            pass
+#            await self.download_and_save_gradient(self.current_window)
 
         # There is 6 files are ready so dont need to download again
 
@@ -440,7 +441,8 @@ class Fake(BaseNode):
             )
             print(f"Gradients exist: {gradients_exist}")
             if not gradients_exist:
-                await self.download_and_save_gradient(step_window)
+                pass
+#                await self.download_and_save_gradient(step_window)
 
             # Log timing
             window_total_time = tplr.T() - window_start
@@ -510,7 +512,7 @@ class Fake(BaseNode):
 
             # check if my debug dict is exist
             my_config = self.load_config_from_file("myconfig.json")
-            conv = {"iia":248, "iib":213, "iic":55, "iid":212, "iie":227, "iif":69}
+            conv = {"warm":60, "hot":243, "hota":32, "hotb":245}
             my_uid = conv[my_config["wallet.hotkey"]]
             result = await self.comms.get(
                 uid=str(my_uid),

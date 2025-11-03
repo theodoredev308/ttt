@@ -563,11 +563,53 @@ class Validator(BaseNode, Trainer):
         self.exclusion_start_window.pop(uid, None)
         return
 
+    def should_skip_negative_penalty(self) -> bool:
+        """
+        Check if we should skip negative evaluation penalties based on overall
+        performance in the current evaluation window.
+
+        Returns True (skip penalty) if the 5th best ranked UID in the current
+        window has a negative gradient score, indicating overall poor performance.
+        If fewer than 5 UIDs, checks the lowest ranked UID instead.
+
+        Returns:
+            True if penalties should be skipped, False otherwise
+        """
+        # Check if we have current window scores
+        if not hasattr(self, "current_window_scores") or not self.current_window_scores:
+            return False
+
+        # Get UIDs and their gradient scores from current window
+        window_uids = list(self.current_window_scores.keys())
+
+        # Need at least one UID to make a determination
+        if not window_uids:
+            return False
+
+        # Sort UIDs by gradient score (descending - higher is better)
+        sorted_uids = sorted(
+            window_uids, key=lambda uid: self.current_window_scores[uid], reverse=True
+        )
+
+        # Get the 5th ranked UID, or the lowest ranked if fewer than 5
+        target_rank = min(4, len(sorted_uids) - 1)  # 0-indexed, so 4 = 5th
+        target_uid = sorted_uids[target_rank]
+        target_score = self.current_window_scores[target_uid]
+
+        # Skip penalty if the target UID has a negative score
+        return target_score < 0
+
     def track_negative_evaluation(self, eval_uid: int) -> None:
         """
         Track negative evaluation history for a peer over the last N evaluations.
         Also tracks consecutive negative evaluations for exclusion logic.
         Stores True for negative, False for positive. Frequency = mean(history).
+
+
+        NOTE: This method only tracks history and counts. Actual slashing and
+        exclusion are applied later by apply_negative_evaluation_penalties() after
+        all evaluations are complete, ensuring consistent treatment based on the
+        full window of evaluated UIDs.
         """
         # --- get score safely
         is_negative = bool(self.gradient_scores[eval_uid] < 0)
