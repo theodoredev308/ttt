@@ -86,7 +86,7 @@ class Fake(BaseNode):
         parser.add_argument(
             "--max-gradients",
             type=int,
-            default=6,
+            default=3,
             help="Maximum number of different gradients to store",
         )
         parser.add_argument(
@@ -211,7 +211,7 @@ class Fake(BaseNode):
             uid=self.uid,
             version=tplr.__version__,
         )
-        self.number = {248:1, 213:2, 55:3, 212:4, 227:5, 69:6}
+        self.number = {243:1, 32:2, 60:3, 245:4}
 
         self.log_with_level("[Init] ✔ Simple miner ready – entering run()", SUCCESS_LEVEL)
 
@@ -317,7 +317,7 @@ class Fake(BaseNode):
             self.log_with_level(f"Error getting available gradient files: {e}", WARNING_LEVEL)
             return []
 
-    async def download_and_save_gradient(self, window: int):
+    async def download_and_save_gradient(self, window: int, target_uids: list[int]):
         """Download gradient from a peer and save it to disk"""
         # Get available peers
         peers = await self.get_available_peers(window)
@@ -326,17 +326,15 @@ class Fake(BaseNode):
             return
 
         # Try to download from specified UID or random peer
-        target_uid = 74
-        # if target_uid is None or target_uid not in peers:
-        #     import random
-        #     target_uid = random.choice(peers)
+        import random
 
         # Download gradient
-        print(window - 1, target_uid)
-        count = 6
+        count = 3
         i = 0
         while count > 0:
-            gradient = await self.download_gradient_from_peer(window - i, target_uid)
+            uid = random.choice(target_uids)
+            print(f"Downloading gradient from UID {uid}")
+            gradient = await self.download_gradient_from_peer(window - i, uid)
             if i > 30:
                 break
             if gradient is not None:
@@ -355,6 +353,7 @@ class Fake(BaseNode):
 
     async def submit_gradient_with_delay(self, window: int, delay_seconds: int, first: bool = False):
         """Load gradient from disk and submit with a delay"""
+        # return
         # Get available gradient files
         config_data = self.load_config_from_file("myconfig.json")
         submit_uids = config_data["submit_uid"]
@@ -412,7 +411,7 @@ class Fake(BaseNode):
 
         # Download initial gradient
         gradients_exist = all(
-            os.path.exists(f"gradient_storage/gradient_{i}.pkl") for i in range(6)
+            os.path.exists(f"gradient_storage/gradient_{i}.pkl") for i in range(3)
         )
         print(f"Gradients exist: {gradients_exist}")
         if not gradients_exist:
@@ -423,6 +422,7 @@ class Fake(BaseNode):
 
         while not self.stop_event.is_set():
             await asyncio.sleep(0)
+            await self.wandb_sync()
             
             # Initialize window
             window_start = tplr.T()
@@ -437,12 +437,13 @@ class Fake(BaseNode):
             # Check if 6 gradients exist before downloading
             print(f"Step window: {step_window}")
             gradients_exist = all(
-                os.path.exists(f"gradient_storage/gradient_{i}.pkl") for i in range(6)
+                os.path.exists(f"gradient_storage/gradient_{i}.pkl") for i in range(3)
             )
             print(f"Gradients exist: {gradients_exist}")
-            if not gradients_exist:
-                pass
-#                await self.download_and_save_gradient(step_window)
+            # if not gradients_exist:
+                # pass
+            gradient_uids = self.wandb_info.get_gradient_score_uids(20)
+            await self.download_and_save_gradient(step_window, gradient_uids)
 
             # Log timing
             window_total_time = tplr.T() - window_start
@@ -459,9 +460,10 @@ class Fake(BaseNode):
             my_config = self.load_config_from_file("myconfig.json")
             upload_start = my_config["upload_start"]
             if upload_start == 1:
-                await self.submit_gradient_with_delay(step_window, 120, first=True)
+                await self.submit_gradient_with_delay(step_window, 0, first=True)
 
-            await self.wandb_sync()
+            await asyncio.sleep(120)
+
             debug_result, debug_global_step = None, None
             sync_scores, sync_uids = self.wandb_info.get_sync_score(), self.wandb_info.get_sync_score_uids(20)
             self.log_with_level(f"Sync uids: {sync_uids}", INFO_LEVEL)
@@ -492,7 +494,7 @@ class Fake(BaseNode):
                 for uid in eval_uids:
                     result = await self.comms.get(
                         uid=str(uid),
-                        window=step_window,
+                        window=step_window - 1,
                         key="debug",
                         local=False,
                         stale_retention=10,
@@ -514,18 +516,20 @@ class Fake(BaseNode):
             my_config = self.load_config_from_file("myconfig.json")
             conv = {"warm":60, "hot":243, "hota":32, "hotb":245}
             my_uid = conv[my_config["wallet.hotkey"]]
-            result = await self.comms.get(
-                uid=str(my_uid),
-                window=step_window,
-                key="debug",
-                local=False,
-                stale_retention=10,
-            )
-            if result.success:
-                result = cast(dict, result.data)
-                success = True
-            else:
-                success = False
+            # result = await self.comms.get(
+            #     uid=str(my_uid),
+            #     window=step_window,
+            #     key="debug",
+            #     local=False,
+            #     stale_retention=10,
+            # )
+            # if result.success:
+            #     result = cast(dict, result.data)
+            #     success = True
+            # else:
+            #     success = False
+
+            success = False
 
             if not success:
                 config_data = self.load_config_from_file("myconfig.json")
@@ -534,7 +538,7 @@ class Fake(BaseNode):
                     await self.comms.put(
                         state_dict=debug_dict,
                         uid=str(uid),
-                        window=step_window,
+                        window=step_window - 1,
                         key="debug",
                         local=False,
                         stale_retention=100,

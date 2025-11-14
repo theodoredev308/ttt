@@ -1,0 +1,1 @@
+python3 neurons/commit.py --wallet.name multisig-jjpes-atel --wallet.hotkey warma --netuid 3

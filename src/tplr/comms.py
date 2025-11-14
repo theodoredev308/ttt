@@ -1037,7 +1037,7 @@ class Comms(ChainManager):
                                     Key=key,
                                     Range=f"bytes={start}-{end}",
                                 ),
-                                timeout=15,
+                                timeout=60,
                             )
 
                             bytes_written = 0
@@ -1053,8 +1053,8 @@ class Comms(ChainManager):
                                         to_read = min(
                                             buffer_size, expected_len - bytes_written
                                         )
-                                        chunk = await stream.wait_for(
-                                            stream.read(to_read), timeout=15
+                                        chunk = await asyncio.wait_for(
+                                            stream.read(to_read), timeout=60
                                         )
                                         if not chunk:
                                             raise Exception(
