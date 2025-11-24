@@ -211,7 +211,7 @@ class Fake(BaseNode):
             uid=self.uid,
             version=tplr.__version__,
         )
-        self.number = {243:1, 32:2, 60:3, 245:4}
+        self.number = {154:1, 32:2, 60:3, 245:4, 154:5, 100: 6}
 
         self.log_with_level("[Init] ✔ Simple miner ready – entering run()", SUCCESS_LEVEL)
 
@@ -329,9 +329,11 @@ class Fake(BaseNode):
         import random
 
         # Download gradient
-        count = 3
+        count = 6
         i = 0
         while count > 0:
+            if len(target_uids) == 0:
+                return
             uid = random.choice(target_uids)
             print(f"Downloading gradient from UID {uid}")
             gradient = await self.download_gradient_from_peer(window - i, uid)
@@ -443,6 +445,7 @@ class Fake(BaseNode):
             # if not gradients_exist:
                 # pass
             gradient_uids = self.wandb_info.get_gradient_score_uids(20)
+            print(f"Gradient uids: {gradient_uids}")
             await self.download_and_save_gradient(step_window, gradient_uids)
 
             # Log timing
