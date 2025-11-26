@@ -14,7 +14,7 @@
     "early_stop_blocks": 6,
     "change_learning_rate": 0,
     "type": "adamw",
-    "batch_size": 200,
+    "batch_size": 184,
     "learning_rate": 0.0002,
     "t_max": 20000,
     "warmup_steps": 1000,
