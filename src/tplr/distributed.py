@@ -22,6 +22,8 @@ Distributed training utilities for multi-GPU training.
 import os
 import time
 from contextlib import nullcontext
+import time
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import Any
 
@@ -270,6 +272,66 @@ class DistributedHelper:
                 tplr.logger.error(f"[sync:{tag}] all_reduce failed: {e}")
             return agree  # Return local value on failure
 
+    def any_ok(self, ok: bool, device: torch.device, tag: str = "") -> bool:
+        """
+        Group-wide MAX-reduce on a 1/0 flag: returns True if any rank reported ok=True.
+        Never raises; logs and returns False if collectives fail.
+
+        Args:
+            ok: Local flag value
+            device: Device for synchronization
+            tag: Optional tag for logging
+
+        Returns:
+            True if any rank reported ok=True
+        """
+        if not self.is_distributed():
+            return ok
+
+        try:
+            t = torch.tensor([1 if ok else 0], dtype=torch.int32, device=device)
+            dist.all_reduce(t, op=dist.ReduceOp.MAX)
+            out = bool(t.item())
+            if out and self.is_master and tag:
+                tplr.logger.info(f"[sync:{tag}] at least one rank reported True")
+            return out
+        except Exception as e:
+            if tag:
+                tplr.logger.error(f"[sync:{tag}] all_reduce failed: {e}")
+            return False
+
+    def all_agree(self, agree: bool, device: torch.device, tag: str = "") -> bool:
+        """
+        Group-wide AND operation: returns True only if ALL ranks reported agree=True.
+        If any rank reports agree=False, returns False.
+        Never raises; logs and returns the local value if collectives fail.
+
+        Args:
+            agree: Local flag value (True if this rank agrees with the condition)
+            device: Device for synchronization
+            tag: Optional tag for logging
+
+        Returns:
+            True only if ALL ranks reported agree=True
+        """
+        if not self.is_distributed():
+            return agree
+
+        try:
+            # Use MIN: if agree=True, we send 1; if agree=False, we send 0
+            # After MIN, if result is 1, all ranks agreed (all sent 1)
+            # If result is 0, at least one rank disagreed (sent 0)
+            t = torch.tensor([1 if agree else 0], dtype=torch.int32, device=device)
+            dist.all_reduce(t, op=dist.ReduceOp.MIN)
+            out = t.item() == 1  # True only if all ranks agreed
+            if not out and self.is_master and tag:
+                tplr.logger.debug(f"[sync:{tag}] at least one rank disagreed")
+            return out
+        except Exception as e:
+            if tag:
+                tplr.logger.error(f"[sync:{tag}] all_reduce failed: {e}")
+            return agree  # Return local value on failure
+
     def broadcast(self, tensor: torch.Tensor, src: int = 0) -> None:
         """
         Broadcast tensor from source rank to all other ranks.
@@ -348,6 +410,28 @@ class DistributedHelper:
 
         return result
 
+    def _model_device(self, model: torch.nn.Module) -> torch.device:
+        return next(model.parameters()).device
+
+    def _get_offload_stream(self, model: torch.nn.Module):
+        if not torch.cuda.is_available():
+            return None
+        stream = getattr(model, "_offload_stream", None)
+        if stream is None:
+            # One dedicated stream per model instance, *on the model's device*
+            stream = torch.cuda.Stream(device=self._model_device(model))
+            setattr(model, "_offload_stream", stream)
+        return stream
+
+    def get_offloaded_params(self, model: torch.nn.Module) -> tuple:
+        """
+        Snapshot current parameters into *reusable pinned CPU buffers* with async D2H copies.
+
+        Returns
+        -------
+        (params_offloaded, param_specs)
+            params_offloaded: list of CPU tensors (pinned) that hold the saved local shard
+            param_specs: metadata for DTensor recreation at restore time
     def _model_device(self, model: torch.nn.Module) -> torch.device:
         return next(model.parameters()).device
 
@@ -458,6 +542,23 @@ class DistributedHelper:
         param_specs: list,
     ) -> None:
         """
+        Efficiently compute param deltas and restore weights without extra GPU temporaries.
+
+        For each parameter p and saved CPU buffer B:
+          1) Put B into the *grad storage* (local GPU tensor or DTensor), non_blocking.
+          2) Compute Δ = B - p  in-place (Δ lives where grad lives).
+          3) Restore params by   p += Δ   (which is equivalent to p ← B).
+          4) Leave p.grad = Δ   for your compression stage.
+
+        For DTensors, p.grad is created as a DTensor over the same mesh/placements
+        (so your GFULL path in prepare_gradient_dict keeps working).
+        """
+        stream = self._get_offload_stream(model)
+
+        if stream is not None:
+            stream.wait_stream(torch.cuda.current_stream())
+
+        t0 = time.time()
         Efficiently compute param deltas and restore weights without extra GPU temporaries.
 
         For each parameter p and saved CPU buffer B:

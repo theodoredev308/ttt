@@ -49,6 +49,8 @@ class Trainer:
     def __init__(self):
         # Initialize scheduler step count early so it's available during catch-up
         self.inner_scheduler_step_count = 0
+        # Initialize scheduler step count early so it's available during catch-up
+        self.inner_scheduler_step_count = 0
 
     def set_dataloader(self, validator: bool = False) -> None:
         self.dataset = self.dataset_manager.active_dataset
@@ -740,6 +742,10 @@ class Trainer:
         # Do this once per window, not per micro-batch.
         self.prefetch_inner_optimizer_states()
 
+        # --- Prefetch inner optimizer states back to GPU, if they were offloaded ---
+        # Do this once per window, not per micro-batch.
+        self.prefetch_inner_optimizer_states()
+
         # Initialize profiler if config is available (from BaseNode)
         prof_config = getattr(self, "_prof_config", None)
         prof = None
@@ -918,11 +924,37 @@ class Trainer:
                                     original_lrs.append(param_group["lr"])
                                     param_group["lr"] = param_group["lr"] * warmup_scale
 
+                            # Apply warmup LR scaling if we're in warmup period
+                            original_lrs = []
+                            if self.warmup_steps_taken < self.warmup_inner_steps:
+                                warmup_scale = (
+                                    self.warmup_steps_taken + 1
+                                ) / self.warmup_inner_steps
+                                for param_group in self.inner_optimizer.param_groups:
+                                    original_lrs.append(param_group["lr"])
+                                    param_group["lr"] = param_group["lr"] * warmup_scale
+
                             # Unscale, clip, then step via GradScaler if using fp16
                             self.scaler.unscale_(self.inner_optimizer)
                             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                             self.scaler.step(self.inner_optimizer)
                             self.scaler.update()
+
+                            # Restore original LR after warmup scaling
+                            if self.warmup_steps_taken < self.warmup_inner_steps:
+                                for i, param_group in enumerate(
+                                    self.inner_optimizer.param_groups
+                                ):
+                                    param_group["lr"] = original_lrs[i]
+
+                            # Increment warmup counter
+                            if self.warmup_steps_taken < self.warmup_inner_steps:
+                                self.warmup_steps_taken += 1
+
+                            # Step scheduler unless we're in flatten window
+                            if not self.should_skip_scheduler_step():
+                                self.inner_scheduler.step()
+                            self.inner_scheduler_step_count += 1
 
                             # Restore original LR after warmup scaling
                             if self.warmup_steps_taken < self.warmup_inner_steps:
@@ -995,7 +1027,11 @@ class Trainer:
                         tplr.logger.info("<Exhausted window: exiting synchronously>")
                     if not null_round:
                         # Catch up remaining scheduler steps (respecting flatten window)
+                        # Catch up remaining scheduler steps (respecting flatten window)
                         for _ in range(inner_step_count, self.hparams.inner_steps):
+                            if not self.should_skip_scheduler_step():
+                                self.inner_scheduler.step()
+                            self.inner_scheduler_step_count += 1
                             if not self.should_skip_scheduler_step():
                                 self.inner_scheduler.step()
                             self.inner_scheduler_step_count += 1
@@ -1003,6 +1039,40 @@ class Trainer:
 
             await asyncio.sleep(0)
 
+        # ---------------------------------------------------------------------- #
+        # 6. Compute gradient and optimizer metrics BEFORE clearing gradients
+        # ---------------------------------------------------------------------- #
+        adam_metrics = self.compute_adam_metrics()
+
+        # Compute global gradient and weight norms (squared sum across ranks, then stats)
+        local_grad_norms_sq = []
+        local_weight_norms_sq = []
+
+        for p in self.model.parameters():
+            if p.requires_grad:
+                local_weight_norms_sq.append((p.norm() ** 2).item())
+                if p.grad is not None:
+                    local_grad_norms_sq.append((p.grad.norm() ** 2).item())
+
+        # Sum squared norms across ranks
+        total_grad_norm_sq = sum(local_grad_norms_sq) if local_grad_norms_sq else 0.0
+        total_weight_norm_sq = (
+            sum(local_weight_norms_sq) if local_weight_norms_sq else 0.0
+        )
+
+        if self.world_size > 1 and dist_helper.is_distributed():
+            total_grad_norm_sq = dist_helper.ddp_reduce(
+                total_grad_norm_sq, device=self.device
+            )
+            total_weight_norm_sq = dist_helper.ddp_reduce(
+                total_weight_norm_sq, device=self.device
+            )
+
+        # Global norms (sqrt of summed squares)
+        global_grad_norm = (total_grad_norm_sq**0.5) if total_grad_norm_sq > 0 else 0.0
+        global_weight_norm = (
+            (total_weight_norm_sq**0.5) if total_weight_norm_sq > 0 else 0.0
+        )
         # ---------------------------------------------------------------------- #
         # 6. Compute gradient and optimizer metrics BEFORE clearing gradients
         # ---------------------------------------------------------------------- #
@@ -1050,8 +1120,13 @@ class Trainer:
             "global_grad_norm": global_grad_norm,  # global gradient norm
             "global_weight_norm": global_weight_norm,  # global weight norm
             "adam_metrics": adam_metrics,  # Adam optimizer metrics dict
+            "global_grad_norm": global_grad_norm,  # global gradient norm
+            "global_weight_norm": global_weight_norm,  # global weight norm
+            "adam_metrics": adam_metrics,  # Adam optimizer metrics dict
         }
 
+    def outer_step(self, gather_result, log_wandb: bool = False):
+        return tplr.neurons.outer_step(
     def outer_step(self, gather_result, log_wandb: bool = False):
         return tplr.neurons.outer_step(
             self.model,
@@ -1065,6 +1140,8 @@ class Trainer:
             is_master=self.is_master,
             world_size=self.world_size,
             use_dct=self.hparams.use_dct,
+            wandb_run=self.wandb if self.is_master and log_wandb else None,
+            global_step=self.global_step,
             wandb_run=self.wandb if self.is_master and log_wandb else None,
             global_step=self.global_step,
         )

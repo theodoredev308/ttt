@@ -99,12 +99,16 @@ def prepare_gradient_dict(miner: "Miner", step_window: int, null_round: bool = F
     # Build params dict once to avoid repeated iteration
     params_dict = dict(miner.model.named_parameters())
 
+    # Build params dict once to avoid repeated iteration
+    params_dict = dict(miner.model.named_parameters())
+
     # Batch load all error feedback tensors to GPU
     for n in miner.owned_params:
         if miner.error_feedback.get(n, None) is not None:
             if miner.error_feedback[n].is_cuda:
                 continue
             # Get the device from the corresponding parameter
+            param = params_dict.get(n)
             param = params_dict.get(n)
             if param is not None:
                 miner.error_feedback[n] = miner.error_feedback[n].to(
@@ -134,6 +138,7 @@ def prepare_gradient_dict(miner: "Miner", step_window: int, null_round: bool = F
             grad_full = g.to(p.device)
 
         # Non-owners: after participating in grad collective, drop grad and continue.
+        # Non-owners: after participating in grad collective, drop grad and continue.
         if not owned:
             p.grad = None
             continue
@@ -152,6 +157,7 @@ def prepare_gradient_dict(miner: "Miner", step_window: int, null_round: bool = F
             error_feedback.zero_()
         else:
             error_feedback.mul_(miner.hparams.momentum_decay)
+            error_feedback.add_(grad_full)
             error_feedback.add_(grad_full)
 
         # --- 4) Encode & compress (owner only) ---
@@ -237,11 +243,15 @@ def outer_step(
     wandb_run: Run | None = None,
     global_step: int | None = None,
 ) -> dict | None:
+) -> dict | None:
     """
     Memory-minimizing variant:
       - Builds and applies ONE param's grad at a time.
       - Calls optimizer.step() per param (others have grad=None, so they're skipped).
       - Frees all temporaries and grad immediately after each step.
+
+    Returns:
+      Fingerprint dict containing gradient statistics (master rank only), or None.
 
     Returns:
       Fingerprint dict containing gradient statistics (master rank only), or None.
@@ -258,6 +268,8 @@ def outer_step(
     src_rank = 0
     on_src = is_master or not ddp
 
+    # Only master reads aggregated payload (others rely on broadcasts).
+    # Accept both SimpleNamespace and plain dict payloads.
     # Only master reads aggregated payload (others rely on broadcasts).
     # Accept both SimpleNamespace and plain dict payloads.
     src_sd: dict | None = None
@@ -325,8 +337,12 @@ def outer_step(
                 if not isinstance(vals, (list, tuple)):
                     vals = [vals]
                 # Dequantize values directly on target device (H2D per-block if needed)
+                # Dequantize values directly on target device (H2D per-block if needed)
                 vals_f32 = compressor.maybe_dequantize_values(vals, qps, device)
                 if vals_f32:
+                    # Ensure indices (or packed tuples) live on the same device as 'ref'
+                    idxs_dev = _idx_to_device(idxs, device)
+                    payload = (idxs_dev, vals_f32)
                     # Ensure indices (or packed tuples) live on the same device as 'ref'
                     idxs_dev = _idx_to_device(idxs, device)
                     payload = (idxs_dev, vals_f32)
@@ -343,6 +359,10 @@ def outer_step(
 
         # ------- build the full dense grad on the source rank only -------
         if on_src:
+            try:
+                idxs_dev, vals_f32 = payload  # type: ignore[misc]
+                # Per-block norms for stats/optional clipping inside batch_decompress
+                block_norms = torch.stack([torch.norm(v, p=2) for v in vals_f32])
             try:
                 idxs_dev, vals_f32 = payload  # type: ignore[misc]
                 # Per-block norms for stats/optional clipping inside batch_decompress
@@ -366,13 +386,49 @@ def outer_step(
                     normalise=False,
                     clip_norm=True,
                 )
+                # Use empty_like to avoid copying the param; just provide dtype/device/shape
+                ref = torch.empty_like(p, device=device, dtype=p.dtype)
+                decompressed = compressor.batch_decompress(
+                    ref,
+                    idxs_dev,
+                    vals_f32,
+                    xshapes[name],
+                    totalks[name],
+                    quantize_params=None,
+                    block_norms=block_norms,
+                    normalise=False,
+                    clip_norm=True,
+                )
 
                 full_grad_src = transformer.decode(decompressed, use_dct=use_dct)
                 # Single conversion to target dtype+device to avoid extra temporaries
                 full_grad_src = full_grad_src.to(
                     dtype=p.dtype, device=p.device, non_blocking=True
                 )
+                full_grad_src = transformer.decode(decompressed, use_dct=use_dct)
+                # Single conversion to target dtype+device to avoid extra temporaries
+                full_grad_src = full_grad_src.to(
+                    dtype=p.dtype, device=p.device, non_blocking=True
+                )
 
+                # Accumulate fingerprint statistics for this parameter
+                if fingerprint is not None:
+                    param_norm = torch.norm(full_grad_src, p=2).item()
+                    fingerprint["param_norms"][name] = param_norm
+                    fingerprint["total_norm_sq"] += param_norm**2
+                    fingerprint["total_elements"] += full_grad_src.numel()
+                    fingerprint["param_means"][name] = full_grad_src.mean().item()
+            finally:
+                # Free intermediate pieces ASAP (existence-guarded)
+                try:
+                    del decompressed
+                except UnboundLocalError:
+                    pass
+                # vals/idxs/qps live in src_sd; only local views should be dropped
+                try:
+                    del vals_f32, idxs_dev, block_norms, ref
+                except UnboundLocalError:
+                    pass
                 # Accumulate fingerprint statistics for this parameter
                 if fingerprint is not None:
                     param_norm = torch.norm(full_grad_src, p=2).item()
@@ -478,6 +534,12 @@ def outer_step(
         return fingerprint
     return None
 
+    # Compute final fingerprint (master rank only)
+    if on_src and fingerprint is not None:
+        fingerprint["global_l2_norm"] = math.sqrt(fingerprint["total_norm_sq"])
+        return fingerprint
+    return None
+
 
 async def update_peers(instance: NeuronT, window: int, peer_start: float) -> None:
     # Check if peers list is empty and fetch previous list if needed
@@ -507,6 +569,7 @@ async def update_peers(instance: NeuronT, window: int, peer_start: float) -> Non
         and instance.peers_update_window  # they should be on bucket by now
         + instance.hparams.peer_replacement_frequency
         - window
+        <= instance.hparams.peer_list_window_margin
         <= instance.hparams.peer_list_window_margin
     ):
         result = await instance.comms.get_peer_list()
@@ -680,6 +743,7 @@ async def handle_checkpoint_catchup(
     ckpt_global_step: int,
     from_bootstrap: bool,
     aggregator_device: str | None = None,
+    aggregator_device: str | None = None,
 ) -> None:
     """
     Handle catch-up logic after checkpoint loading and replay scheduler steps.
@@ -701,11 +765,17 @@ async def handle_checkpoint_catchup(
         await catchup_with_aggregation_server(
             instance, instance.start_window, aggregator_device=aggregator_device
         )
+        await catchup_with_aggregation_server(
+            instance, instance.start_window, aggregator_device=aggregator_device
+        )
     elif from_bootstrap:
         # Loading from bootstrap, catch up from start_window with current version gradients
         tplr.logger.info(
             f"Loaded bootstrap checkpoint, catching up from start_window "
             f"{instance.start_window} to {instance.current_window}"
+        )
+        await catchup_with_aggregation_server(
+            instance, instance.start_window, aggregator_device=aggregator_device
         )
         await catchup_with_aggregation_server(
             instance, instance.start_window, aggregator_device=aggregator_device
@@ -720,6 +790,9 @@ async def handle_checkpoint_catchup(
         await catchup_with_aggregation_server(
             instance, catch_up_start, aggregator_device=aggregator_device
         )
+        await catchup_with_aggregation_server(
+            instance, catch_up_start, aggregator_device=aggregator_device
+        )
     else:
         tplr.logger.info(
             f"Checkpoint at window {ckpt_sync_win} is up to date with current window "
@@ -729,8 +802,22 @@ async def handle_checkpoint_catchup(
     # Replay scheduler steps based on windows completed from checkpoint
     # ckpt_global_step tracks windows, scheduler needs inner_steps per window
     total_inner_steps = ckpt_global_step * instance.hparams.inner_steps
-    if total_inner_steps > 0:
+
+    # Apply configurable rewind before replaying scheduler to give slack on restarts
+    rewind_inner_steps = scheduler_cfg.get("replay_rewind_inner_steps", 0)
+    if rewind_inner_steps > 0:
+        total_inner_steps = max(total_inner_steps - rewind_inner_steps, 0)
+        tplr.logger.info(
+            f"Rewinding scheduler replay by {rewind_inner_steps} inner steps; "
+            f"{total_inner_steps} steps remain to replay"
+        )
+
+    if total_inner_steps > 0 and getattr(instance, "inner_scheduler", None) is not None:
         for _ in range(total_inner_steps):
+            # Respect flatten window during replay
+            if not instance.should_skip_scheduler_step():
+                instance.inner_scheduler.step()
+            instance.inner_scheduler_step_count += 1
             # Respect flatten window during replay
             if not instance.should_skip_scheduler_step():
                 instance.inner_scheduler.step()
@@ -742,6 +829,9 @@ async def handle_checkpoint_catchup(
 
 
 async def catchup_with_aggregation_server(
+    instance: NeuronT,
+    checkpoint_current_window: int,
+    aggregator_device: str | None = None,
     instance: NeuronT,
     checkpoint_current_window: int,
     aggregator_device: str | None = None,
@@ -770,6 +860,11 @@ async def catchup_with_aggregation_server(
         "Starting catch‑up using aggregated_gradients with memory optimization..."
     )
     assert instance.start_window is not None
+
+    # Use provided device or default to instance's device
+    catchup_device = (
+        aggregator_device if aggregator_device is not None else instance.config.device
+    )
 
     # Use provided device or default to instance's device
     catchup_device = (

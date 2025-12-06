@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import concurrent.futures
 import gc
+import gc
 import hashlib
 import json
 import os
@@ -41,6 +42,7 @@ from torch.distributed.tensor import DTensor as DT
 import tplr
 from neurons import BaseNode, Trainer
 from neurons.base_node import CPU_COUNT
+from tplr import model_factory
 from tplr import model_factory
 from tplr.distributed import dist_helper
 
@@ -370,6 +372,9 @@ class Miner(BaseNode, Trainer):
             token_dtype=np.uint32,  # Match preprocessing script dtype
         )
         self.outer_steps_per_shard = getattr(self.hparams, "outer_steps_per_shard")
+        self.shard_reset_outer_step = getattr(
+            self.hparams, "shard_reset_outer_step", None
+        )
 
         self.log_with_level("[Init] ✔ fully done – entering run()", SUCCESS_LEVEL)
 
@@ -429,6 +434,8 @@ class Miner(BaseNode, Trainer):
         # If no checkpoint was loaded, initialize model weights now
         if not self.model_initialized:
             tplr.logger.info("No checkpoint loaded, initializing model weights...")
+            # Initialize weights in-place on the existing model
+            model_factory.initialize_weights_inplace(self.model, self.hparams)
             # Initialize weights in-place on the existing model
             model_factory.initialize_weights_inplace(self.model, self.hparams)
             self.model_initialized = True
@@ -545,8 +552,15 @@ class Miner(BaseNode, Trainer):
             offload_time = time.time() - offload_start
             tplr.logger.info(f"Parameter offload to CPU took {offload_time:.4f}s")
 
+            # Offload parameters to CPU before inner_steps
+            offload_start = time.time()
+            params_offloaded, param_specs = dist_helper.get_offloaded_params(self.model)
+            offload_time = time.time() - offload_start
+            tplr.logger.info(f"Parameter offload to CPU took {offload_time:.4f}s")
+
             # 3. Accumulate gradients over batches
             train_start = tplr.T()
+            # Check if we're in a null round (warmup phase or no gather peers)
             # Check if we're in a null round (warmup phase or no gather peers)
             window_offset = self.current_window - (
                 self.start_window or self.current_window
@@ -559,7 +573,27 @@ class Miner(BaseNode, Trainer):
                 warmup_null or no_peers_null, self.device, "null_round_check"
             )
 
+            warmup_null = window_offset < self.warmup_windows
+            no_peers_null = len(self.comms.peers) == 0
+
+            # Broadcast null round decision to all ranks - all ranks must agree to do null round
+            null_round = dist_helper.all_agree(
+                warmup_null or no_peers_null, self.device, "null_round_check"
+            )
+
             if null_round:
+                if warmup_null:
+                    tplr.logger.info(
+                        f"Start accumulating... (null round: warmup {window_offset + 1}/{self.warmup_windows})"
+                    )
+                elif no_peers_null:
+                    tplr.logger.info(
+                        f"Start accumulating... (null round: no gather peers available)"
+                    )
+                else:
+                    tplr.logger.info(
+                        f"Start accumulating... (null round: triggered by another rank)"
+                    )
                 if warmup_null:
                     tplr.logger.info(
                         f"Start accumulating... (null round: warmup {window_offset + 1}/{self.warmup_windows})"
@@ -595,6 +629,15 @@ class Miner(BaseNode, Trainer):
             restore_time = time.time() - restore_start
             tplr.logger.info(f"Parameter restore to GPU took {restore_time:.4f}s")
 
+
+            # Restore parameters from CPU after inner_steps
+            restore_start = time.time()
+            dist_helper.restore_offloaded_params(
+                self.model, params_offloaded, param_specs
+            )
+            restore_time = time.time() - restore_start
+            tplr.logger.info(f"Parameter restore to GPU took {restore_time:.4f}s")
+
             training_time = tplr.T() - train_start
             window_entry_loss = res["window_entry_loss"]
             n_batches = res["batch_count"]
@@ -614,7 +657,23 @@ class Miner(BaseNode, Trainer):
 
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+            global_grad_norm = res["global_grad_norm"]
+            global_weight_norm = res["global_weight_norm"]
+            adam_metrics = res["adam_metrics"]
+
+            # Free VRAM pressure during compression by offloading inner opt states to CPU
+            # (they are not needed until the next inner_steps call).
+            try:
+                self.offload_inner_optimizer_states()
+            except Exception:
+                tplr.logger.warning(
+                    "Optimizer-state offload failed; continuing.", exc_info=True
+                )
+
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
             # If training finishes early, wait until the *next* chain-window starts.
+
 
             tplr.logger.info(
                 f"{tplr.P(step_window, tplr.T() - train_start)} Completed training"
@@ -628,9 +687,16 @@ class Miner(BaseNode, Trainer):
             self.log_gpu_memory("Before prepare_gradient_dict")
             torch.cuda.reset_peak_memory_stats(self.device)
 
+            self.log_gpu_memory("Before prepare_gradient_dict")
+            torch.cuda.reset_peak_memory_stats(self.device)
+
             shard_gradient, _, _ = tplr.prepare_gradient_dict(
                 self, step_window, null_round
             )
+
+            peak = torch.cuda.max_memory_allocated(self.device) / 1024**3
+            self.log_gpu_memory("After prepare_gradient_dict")
+            tplr.logger.info(f"[GPU] Peak during compression: {peak:.2f} GB")
 
             peak = torch.cuda.max_memory_allocated(self.device) / 1024**3
             self.log_gpu_memory("After prepare_gradient_dict")
@@ -689,6 +755,22 @@ class Miner(BaseNode, Trainer):
                     for k, v in gradient.items()
                 }
 
+            else:
+                # non-master ranks simply wait; they don't upload
+                put_time = 0.0
+                if self.world_size > 1:
+                    del gathered  # Free gathered list on non-master ranks too
+
+            tplr.logger.info(f"Stopped accumulating: {n_batches} batches")
+            dist_helper.safe_barrier("post_gather", self.local_rank)
+
+            if self.current_window == step_window:
+                tplr.logger.info(
+                    "Training complete; waiting for window to be exhausted..."
+                )
+                await self.wait_until_window(step_window + 1)
+
+            if self.is_master:
             else:
                 # non-master ranks simply wait; they don't upload
                 put_time = 0.0
@@ -803,12 +885,25 @@ class Miner(BaseNode, Trainer):
 
             # Only perform outer step and increment counter if we have gradients to apply
             gradient_fingerprint = None
+            gradient_fingerprint = None
             if should_update:
+                gradient_fingerprint = self.outer_step(gather_result)
                 gradient_fingerprint = self.outer_step(gather_result)
                 self.global_step += (
                     1  # Increment only when we actually do an outer step
                 )
                 model_update_time = tplr.T() - update_start
+                if gradient_fingerprint is not None:
+                    tplr.logger.info(
+                        f"{tplr.P(step_window, model_update_time)} Updated model (Outer step #{self.global_step}) "
+                        f"Fingerprint: global_l2={gradient_fingerprint['global_l2_norm']:.6f}, "
+                        f"params={len(gradient_fingerprint['param_norms'])}, "
+                        f"elements={gradient_fingerprint['total_elements']}"
+                    )
+                else:
+                    tplr.logger.info(
+                        f"{tplr.P(step_window, model_update_time)} Updated model (Outer step #{self.global_step})"
+                    )
                 if gradient_fingerprint is not None:
                     tplr.logger.info(
                         f"{tplr.P(step_window, model_update_time)} Updated model (Outer step #{self.global_step}) "
@@ -845,6 +940,17 @@ class Miner(BaseNode, Trainer):
                                 debug_dict[name + "_debug"] = (
                                     param.flatten()[10:12].detach().cpu().tolist()
                                 )
+                # Add gradient fingerprint if available
+                if gradient_fingerprint is not None:
+                    debug_dict["gradient_fingerprint"] = {
+                        "global_l2_norm": gradient_fingerprint["global_l2_norm"],
+                        "total_elements": gradient_fingerprint["total_elements"],
+                        # Store only first 5 param norms to avoid bloat
+                        "sample_param_norms": dict(
+                            list(gradient_fingerprint["param_norms"].items())[:5]
+                        ),
+                    }
+
                 # Add gradient fingerprint if available
                 if gradient_fingerprint is not None:
                     debug_dict["gradient_fingerprint"] = {

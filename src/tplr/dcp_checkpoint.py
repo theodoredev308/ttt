@@ -52,6 +52,11 @@ def _safe(obj) -> str:
 
 
 
+# Safe escaping for untrusted log inserts (paths, keys, exceptions, etc.)
+def _safe(obj) -> str:
+    return _escape(str(obj))
+
+
 # ── Model-only Stateful (Titan-compatible distributed state dicts) ─────────────
 class AppState(Stateful):
     def __init__(self, model):
@@ -802,7 +807,7 @@ class DCPCheckpointer:
             dst = self.repo_root / key  # mirrored path
             if dst.exists():
                 tplr.logger.debug(
-                    f"[DCP][download-dist] rank {r}/{world} skip (exists) {key}"
+                    f"[DCP][download-dist] rank {r}/{world} skip (exists) {_safe(key)}"
                 )
                 continue
             t0 = time.perf_counter()

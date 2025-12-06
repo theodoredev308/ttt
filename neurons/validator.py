@@ -521,6 +521,9 @@ class Validator(BaseNode, Trainer):
         self.param_change_alpha = 0.2
 
         self.outer_steps_per_shard = getattr(self.hparams, "outer_steps_per_shard")
+        self.shard_reset_outer_step = getattr(
+            self.hparams, "shard_reset_outer_step", None
+        )
         self.dataset_manager = tplr.sharded_dataset.ShardedDatasetManager(
             sequence_length=self.hparams.sequence_length,
             rank=self.local_rank,  # Use local_rank for proper file operations
@@ -1245,7 +1248,11 @@ class Validator(BaseNode, Trainer):
             aggregator_device="cpu",
         )
 
-        current_shard = self.global_step // self.outer_steps_per_shard
+        shard_epoch, current_shard = tplr.sharded_dataset.compute_shard_state(
+            self.global_step,
+            self.outer_steps_per_shard,
+            self.shard_reset_outer_step,
+        )
 
         # Initialize datasets (only rank 0 downloads, handled internally by dataset_manager)
         _ = await self.dataset_manager.initialize_datasets(current_shard)
@@ -1256,6 +1263,7 @@ class Validator(BaseNode, Trainer):
         self.set_dataloader(validator=True)
 
         # Track the current shard to avoid double-swapping at initialization
+        last_shard_epoch = shard_epoch
         last_shard = current_shard
 
         if self.is_master:
@@ -1287,8 +1295,24 @@ class Validator(BaseNode, Trainer):
             window_start = tplr.T()
 
             # Check if we need to swap dataset based on shard index change
-            current_shard_check = self.global_step // self.outer_steps_per_shard
-            if current_shard_check > last_shard:
+            shard_epoch_check, current_shard_check = (
+                tplr.sharded_dataset.compute_shard_state(
+                    self.global_step,
+                    self.outer_steps_per_shard,
+                    self.shard_reset_outer_step,
+                )
+            )
+            if shard_epoch_check != last_shard_epoch:
+                tplr.logger.info(
+                    f"Resetting shard schedule at outer_step {self.global_step} "
+                    f"to shard {current_shard_check}"
+                )
+                await self.dataset_manager.initialize_datasets(current_shard_check)
+                self.set_dataloader(validator=True)
+                dist_helper.safe_barrier("sync_shard_switch", self.local_rank)
+                last_shard_epoch = shard_epoch_check
+                last_shard = current_shard_check
+            elif current_shard_check > last_shard:
                 tplr.logger.info(
                     f"Swapping dataset after {self.global_step} outer steps at window {self.current_window}"
                 )
@@ -1446,21 +1470,35 @@ class Validator(BaseNode, Trainer):
 
             # Only master rank performs the gather operation
             if self.is_master:
-                gather_result = await self.comms.gather_with_reserve(
-                    my_uid=self.uid,
-                    gather_uids=self.comms.peers,
-                    reserve_uids=self.comms.reserve_peers,
-                    window=self.sync_window,
-                    key="gradient",
-                    timeout=90,
-                    device=cast(str, self.device),
-                    local=False,
-                    totalks=self.totalks,
-                    compressor=self.compressor,
-                    time_min=time_min,
-                    time_max=time_max,
-                    expected_compressed_params=self.expected_compressed_params,
-                )
+                try:
+                    tplr.logger.info(
+                        f"Rank {dist_helper.rank} starting gather_with_reserve for window {self.sync_window}"
+                    )
+                    gather_result = await self.comms.gather_with_reserve(
+                        my_uid=self.uid,
+                        gather_uids=self.comms.peers,
+                        reserve_uids=self.comms.reserve_peers,
+                        window=self.sync_window,
+                        key="gradient",
+                        timeout=90,
+                        device=cast(str, self.device),
+                        local=False,
+                        totalks=self.totalks,
+                        compressor=self.compressor,
+                        time_min=time_min,
+                        time_max=time_max,
+                        expected_compressed_params=self.expected_compressed_params,
+                    )
+                    tplr.logger.info(
+                        f"Rank {dist_helper.rank} completed gather_with_reserve for window {self.sync_window}"
+                    )
+                except Exception as e:
+                    tplr.logger.error(
+                        f"Rank {dist_helper.rank} failed during gather_with_reserve: {e}",
+                        exc_info=True,
+                    )
+                    gather_result = None
+                    skip_window = True
 
                 if gather_result is None:
                     tplr.log_with_context(
@@ -1475,8 +1513,20 @@ class Validator(BaseNode, Trainer):
             skip_tensor = torch.tensor(
                 [1 if skip_window else 0], device=self.device, dtype=torch.int32
             )
-            dist_helper.broadcast(skip_tensor, src=0)
-            skip_window = bool(skip_tensor.item())
+            try:
+                tplr.logger.debug(
+                    f"Rank {dist_helper.rank} attempting broadcast of skip_tensor: {skip_tensor.item()}"
+                )
+                dist_helper.broadcast(skip_tensor, src=0)
+                skip_window = bool(skip_tensor.item())
+                tplr.logger.debug(
+                    f"Rank {dist_helper.rank} successfully broadcast skip_tensor: {skip_window}"
+                )
+            except Exception as e:
+                tplr.logger.error(
+                    f"Rank {dist_helper.rank} failed broadcast: {e}", exc_info=True
+                )
+                raise
 
             if skip_window:
                 continue

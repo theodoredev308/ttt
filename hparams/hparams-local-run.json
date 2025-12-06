@@ -8,4 +8,6 @@
     "max_position_embeddings": 128,
     "outer_steps_per_shard": 5,
     "tokenizer_name": "huggyllama/llama-7b"
+    "outer_steps_per_shard": 5,
+    "tokenizer_name": "huggyllama/llama-7b"
 }

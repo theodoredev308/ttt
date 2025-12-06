@@ -2,15 +2,18 @@
     "spec_version": 5,
     "project": "dough",
     "tokenizer_name": "google/gemma-3-270m",
+    "tokenizer_name": "google/gemma-3-270m",
     "sequence_length": 2048,
     "micro_batch_size": 1,
     "target_batch_size": 1024,
     "batch_size": 192,
     "inner_steps": 30,
     "outer_learning_rate": 0.4,
+    "outer_learning_rate": 0.4,
     "blocks_per_window": 115,
     "windows_per_weights": 3,
     "outer_steps_per_shard": 455,
+    "shard_reset_outer_step": 4040,
     "momentum_decay": 0.95,
     "topk_compression": 64,
     "target_chunk": 64,
@@ -30,14 +33,19 @@
     "reserve_decay_ratio": 0.5,
     "minimum_peers": 1,
     "peer_replacement_frequency": 2,
+    "peer_replacement_frequency": 2,
     "peer_list_window_margin": 1,
     "active_check_interval": 100,
+    "recent_windows": 2,
     "recent_windows": 2,
     "power_normalisation": 2.0,
     "validator_sample_micro_bs": 8,
     "gather_peers_slash_threshold": 0.4,
     "uids_per_window": 20,
+    "uids_per_window": 20,
     "time_window_delta_seconds": 70,
+    "reset_inactivity_windows": 3,
+    "sync_max_steps_behind": 2,
     "reset_inactivity_windows": 3,
     "sync_max_steps_behind": 2,
     "eval_lr_factor": 0.2,
@@ -50,6 +58,8 @@
     "quantization_range": 6,
     "burn_rate": 0.5,
     "idx_overlap_threshold": 0.4,
+    "consecutive_negative_threshold": 3,
+    "exclude_negative_peers": true,
     "consecutive_negative_threshold": 3,
     "exclude_negative_peers": true,
   "optimizer": {
@@ -86,6 +96,7 @@
     }
   },
   "offload_optimizer_states": true,
+  "offload_optimizer_states": true,
   "torchtitan": {
     "tp_degree": 1,
     "pp_degree": 1,
@@ -99,6 +110,7 @@
 
     "mixed_precision_param": "bfloat16",
     "mixed_precision_reduce": "bfloat16",
+    "mixed_precision_reduce": "bfloat16",
 
     "enable_async_tensor_parallel": false,
     "disable_loss_parallel": true,
@@ -106,6 +118,8 @@
     "enable_compiled_autograd": false,
 
     "float8_recipe_name": null,
+    
+    "tie_embeddings": true,
     
     "tie_embeddings": true,
 

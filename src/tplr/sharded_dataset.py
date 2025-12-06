@@ -29,6 +29,32 @@ from torch.utils.data import Dataset
 import tplr
 
 
+def compute_shard_state(
+    global_step: int,
+    outer_steps_per_shard: int,
+    reset_outer_step: int | None = None,
+) -> tuple[int, int]:
+    """
+    Compute shard epoch and index with optional reset point.
+
+    Returns:
+        (epoch, shard_index)
+        epoch increments when reset_outer_step is reached; shard_index resets to 0.
+    """
+    if outer_steps_per_shard <= 0:
+        return 0, 0
+
+    if (
+        reset_outer_step is None
+        or reset_outer_step < 0
+        or global_step < reset_outer_step
+    ):
+        return 0, global_step // outer_steps_per_shard
+
+    adjusted_step = max(global_step - reset_outer_step, 0)
+    return 1, adjusted_step // outer_steps_per_shard
+
+
 class SharedShardedDataset(Dataset):
     """
     Memory-maps the *pre-processed* dataset produced by `run_preprocessing()`.
@@ -45,6 +71,7 @@ class SharedShardedDataset(Dataset):
         rank: int,
         world_size: int,
         *,
+        token_dtype: npt.DTypeLike = np.uint32,  # MUST match preprocessing
         token_dtype: npt.DTypeLike = np.uint32,  # MUST match preprocessing
         file_prefix: str = "train",  # Allow custom file prefix (e.g., "val", "eval")
     ):
@@ -96,7 +123,7 @@ class SharedShardedDataset(Dataset):
             )
 
         tokens_file = os.path.join(shards_path, f"{file_prefix}_{shard_index:06d}.npy")
-        ids_file = os.path.join(shards_path, f"sample_ids_{shard_index:06d}.bin")
+        ids_file = os.path.join(shards_path, f"sample_ids_{shard_index:06d}.npy")
 
         return tokens_file, ids_file
 
@@ -197,6 +224,7 @@ class ShardedDatasetManager:
         world_size: int,
         comms: tplr.comms.Comms,
         token_dtype: npt.DTypeLike = np.uint32,
+        token_dtype: npt.DTypeLike = np.uint32,
         file_prefix: str = "train",
     ):
         """Initializes the dataset manager.
@@ -234,6 +262,19 @@ class ShardedDatasetManager:
             The remapped shard index (13 if input was 7, otherwise unchanged).
         """
         return 13 if shard_index == 7 else shard_index
+        self.max_dataset_idx = 14  # bucket_glob_files_idx
+
+    @staticmethod
+    def remap_shard_index(shard_index: int) -> int:
+        """Remaps shard 7 to shard 13, keeps all other indices unchanged.
+
+        Args:
+            shard_index: The original shard index.
+
+        Returns:
+            The remapped shard index (13 if input was 7, otherwise unchanged).
+        """
+        return 13 if shard_index == 7 else shard_index
 
     def prepare_shard(self, shard_index: int) -> asyncio.Task:
         """Prepares a shard for use, downloading it if necessary.
@@ -246,7 +287,13 @@ class ShardedDatasetManager:
         """
         # Remap shard 7 to shard 13
         remapped_shard = self.remap_shard_index(shard_index)
+        # Remap shard 7 to shard 13
+        remapped_shard = self.remap_shard_index(shard_index)
         tokens_file, ids_file = SharedShardedDataset.locate_shards(
+            remapped_shard, file_prefix=self.file_prefix
+        )
+        tplr.logger.info(
+            f"Preparing shard {shard_index} (remapped to {remapped_shard}) at {tokens_file}"
             remapped_shard, file_prefix=self.file_prefix
         )
         tplr.logger.info(
@@ -310,8 +357,17 @@ class ShardedDatasetManager:
             download_task = self.prepare_shard(shard_index)
             await download_task
         # Non-master ranks will just check if files exist (downloaded by rank 0)
+        # Remap shard 7 to shard 13
+        remapped_shard = self.remap_shard_index(shard_index)
+
+        # Only rank 0 downloads the shard, others wait
+        if self.rank == 0:
+            download_task = self.prepare_shard(shard_index)
+            await download_task
+        # Non-master ranks will just check if files exist (downloaded by rank 0)
 
         dataset = SharedShardedDataset(
+            shard_index=remapped_shard,
             shard_index=remapped_shard,
             sequence_length=self.sequence_length,
             rank=self.rank,
@@ -333,8 +389,18 @@ class ShardedDatasetManager:
         # Update internal shard index to match the shard being loaded
         self.shard_index = current_shard_index
 
+        # Update internal shard index to match the shard being loaded
+        self.shard_index = current_shard_index
+
         self.active_dataset = await self.create_dataset(current_shard_index)
         next_shard = (current_shard_index + 1) % self.max_dataset_idx
+
+        # Only rank 0 prepares the next shard to avoid duplicate downloads
+        if self.rank == 0:
+            self.upcoming_dataset = self.prepare_shard(next_shard)
+        else:
+            # Non-master ranks create a dummy completed task
+            self.upcoming_dataset = asyncio.create_task(asyncio.sleep(0))
 
         # Only rank 0 prepares the next shard to avoid duplicate downloads
         if self.rank == 0:

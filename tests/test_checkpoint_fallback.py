@@ -23,11 +23,25 @@ def mock_instance():
     instance.current_window = 150
     instance.global_step = 0
     instance.model_initialized = False
+    instance.inner_scheduler_step_count = 0
 
-    # Setup hparams
-    instance.hparams = MagicMock()
-    instance.hparams.inner_steps = 30
-    instance.hparams.checkpoint_init_window = None
+    # Setup hparams with scheduler config defaults
+    scheduler_cfg = {
+        "warmup_steps": 1500,
+        "warmup_inner_steps": 30,
+        "initial_warmup_inner_steps": 200,
+        "replay_rewind_inner_steps": 0,  # keep tests deterministic
+        "t_max": 140000,
+        "eta_min_factor": 0.1,
+        "flatten_start_step": None,
+        "flatten_duration": 0,
+    }
+    optimizer_cfg = {"type": "adamw", "adamw": {"scheduler": scheduler_cfg}}
+    instance.hparams = SimpleNamespace(
+        inner_steps=30,
+        checkpoint_init_window=None,
+        optimizer=optimizer_cfg,
+    )
 
     # Setup checkpoint manager
     instance.ckpt = MagicMock()
@@ -42,6 +56,9 @@ def mock_instance():
 
     # Bootstrap version (can be overridden in tests)
     instance.bootstrap_version = None
+
+    # Mock should_skip_scheduler_step to return False (no flattening by default)
+    instance.should_skip_scheduler_step = MagicMock(return_value=False)
 
     return instance
 
@@ -278,7 +295,7 @@ class TestHandleCheckpointCatchup:
 
             # Verify - should catch up from start_window (not checkpoint window)
             mock_catchup.assert_called_once_with(
-                mock_instance, mock_instance.start_window
+                mock_instance, mock_instance.start_window, aggregator_device=None
             )
 
             # Should replay scheduler steps: 10 * 30 = 300
@@ -305,7 +322,9 @@ class TestHandleCheckpointCatchup:
             )
 
             # Verify - should catch up from checkpoint window (120)
-            mock_catchup.assert_called_once_with(mock_instance, 120)
+            mock_catchup.assert_called_once_with(
+                mock_instance, 120, aggregator_device=None
+            )
 
             # Should replay scheduler steps: 20 * 30 = 600
             assert mock_instance.inner_scheduler.step.call_count == 600
@@ -336,6 +355,26 @@ class TestHandleCheckpointCatchup:
             assert mock_instance.inner_scheduler.step.call_count == 600
 
     @pytest.mark.asyncio
+    async def test_scheduler_rewind_applied(self, mock_instance):
+        """Test configurable scheduler rewind reduces replayed steps"""
+        mock_instance.inner_scheduler = MagicMock()
+        mock_instance.current_window = 120
+        # Apply rewind of 60 inner steps
+        mock_instance.hparams.optimizer["adamw"]["scheduler"][
+            "replay_rewind_inner_steps"
+        ] = 60
+
+        await handle_checkpoint_catchup(
+            mock_instance,
+            ckpt_ok=True,
+            ckpt_sync_win=120,
+            ckpt_global_step=3,  # 3 * 30 = 90 -> minus 60 = 30
+            from_bootstrap=False,
+        )
+
+        assert mock_instance.inner_scheduler.step.call_count == 30
+
+    @pytest.mark.asyncio
     async def test_catchup_respects_start_window_boundary(self, mock_instance):
         """Test catchup uses max(checkpoint_window, start_window)"""
         mock_instance.inner_scheduler = MagicMock()
@@ -356,7 +395,9 @@ class TestHandleCheckpointCatchup:
             )
 
             # Verify - should catch up from start_window (100), not checkpoint (90)
-            mock_catchup.assert_called_once_with(mock_instance, 100)
+            mock_catchup.assert_called_once_with(
+                mock_instance, 100, aggregator_device=None
+            )
 
             # Should replay scheduler steps: 5 * 30 = 150
             assert mock_instance.inner_scheduler.step.call_count == 150

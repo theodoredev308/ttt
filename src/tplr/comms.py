@@ -582,6 +582,18 @@ class Comms(ChainManager):
                         show_progress=show_progress,
                     ),
                     timeout=download_timeout,
+                # Scale timeout with file size: minimum 300s, or 1 second per 25MB
+                download_timeout = max(300, file_size / (25 * 1024 * 1024))
+                success = await asyncio.wait_for(
+                    self.download_large_file(
+                        s3_client=s3_client,
+                        bucket=bucket,
+                        key=key,
+                        file_size=file_size,
+                        temp_file_path=temp_file_path,
+                        show_progress=show_progress,
+                    ),
+                    timeout=download_timeout,
                 )
 
                 if not success:
@@ -1394,6 +1406,7 @@ class Comms(ChainManager):
         time_max: datetime | None = None,
         show_progress: bool = True,
         map_location: str | None = None,
+        map_location: str | None = None,
     ) -> CommsGetResult:
         """
         Retrieves an object from storage, either locally or from a remote S3 bucket.
@@ -1471,6 +1484,7 @@ class Comms(ChainManager):
                 time_max=time_max,
                 show_progress=show_progress,
                 map_location=map_location,
+                map_location=map_location,
             )
 
             if loaded_data is None:
@@ -1510,6 +1524,7 @@ class Comms(ChainManager):
         time_min: datetime | None = None,
         time_max: datetime | None = None,
         show_progress: bool = False,
+        map_location: str | None = None,
         map_location: str | None = None,
     ) -> CommsGetResult | None:
         """
@@ -1583,6 +1598,7 @@ class Comms(ChainManager):
                 time_min=time_min,
                 time_max=time_max,
                 show_progress=show_progress,
+                map_location=map_location,
                 map_location=map_location,
             )
 
@@ -1688,6 +1704,7 @@ class Comms(ChainManager):
                     stale_retention=stale_retention,
                     time_min=time_min,
                     time_max=time_max,
+                    map_location=device,
                     map_location=device,
                 )
                 for uid in uids

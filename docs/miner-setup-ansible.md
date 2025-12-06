@@ -1,34 +1,18 @@
-# Miner Setup
+# Miner Setup with Ansible
 
-This document provides a comprehensive guide on how to set up and run a miner using `miner.py`. Miners are crucial components of **τemplar**, responsible for training the model on assigned data subsets and sharing their gradients with peers.
+> ⚠️ **DEPRECATED**: This Ansible setup guide is deprecated and may not be maintained with the latest updates. Please refer to the main [Miner Setup Guide](./miner.md) for the current recommended installation process.
 
-## Table of Contents
+This guide provides an alternative method for setting up Templar miners using Ansible automation. The Ansible playbook automates the deployment process, making it easier to provision miners across multiple hosts or manage multi-GPU configurations.
 
-- [Miner Setup](#miner-setup)
-  - [Introduction](#introduction)
-  - [Prerequisites](#prerequisites)
-  - [Running the Miner](#running-the-miner)
-  - [Configuration](#configuration)
-    - [Environment Variables](#environment-variables)
-    - [Hardware Requirements](#hardware-requirements)
-    - [Network Options](#network-options)
-    - [InfluxDB Configuration](#influxdb-configuration)
-  - [Monitoring](#monitoring)
-    - [Logs](#logs)
-    - [Performance](#performance)
-  - [Troubleshooting](#troubleshooting)
-  - [Miner Operations](#miner-operations)
-    - [Model Synchronization](#model-synchronization)
-    - [Training Process](#training-process)
-    - [Gradient Sharing](#gradient-sharing)
+## Overview
 
----
-
-## Introduction
-
-This guide will help you set up and run a miner for **τemplar**. We'll cover both the recommended Docker Compose method and manual installation for environments where Docker is not preferred.
-
----
+The Ansible playbook (`scripts/miner-setup-ansible/playbook.yml`) automates the following tasks:
+- Clones the Templar repository
+- Sets up the required Python virtual environment with CUDA support
+- Installs necessary system and Python packages
+- Configures environment variables and credentials
+- Deploys miners as managed services (systemd or nohup)
+- Supports multi-GPU configurations with separate instances per GPU
 
 ## Prerequisites
 
